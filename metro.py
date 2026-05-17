@@ -14,12 +14,64 @@
 """
 
 import math
+import os
 import random
 import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import pygame
+
+
+def load_font(size: int, bold: bool = False) -> pygame.font.Font:
+    """跨平台中文字体加载。
+    优先尝试 pygame.font.SysFont; 失败 (Windows 注册表 bug 等) 时
+    回退到按系统已知路径直接加载字体文件; 最终 fallback 到 pygame 默认字体。
+    """
+    family = ("Microsoft YaHei,SimHei,PingFang SC,Heiti SC,"
+              "Noto Sans CJK SC,WenQuanYi Micro Hei,Arial")
+    try:
+        f = pygame.font.SysFont(family, size, bold=bold)
+        if f is not None:
+            return f
+    except Exception:
+        pass
+    candidates: List[str] = []
+    if sys.platform.startswith("win"):
+        win_root = os.environ.get("SystemRoot", r"C:\Windows")
+        fdir = os.path.join(win_root, "Fonts")
+        candidates = [
+            os.path.join(fdir, "msyhbd.ttc" if bold else "msyh.ttc"),
+            os.path.join(fdir, "msyh.ttf"),
+            os.path.join(fdir, "simhei.ttf"),
+            os.path.join(fdir, "simsun.ttc"),
+            os.path.join(fdir, "arial.ttf"),
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ]
+    else:
+        candidates = [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                f = pygame.font.Font(path, size)
+                if bold:
+                    f.set_bold(True)
+                return f
+            except Exception:
+                continue
+    f = pygame.font.Font(None, size)
+    if bold:
+        f.set_bold(True)
+    return f
 
 # ---------- 基础配置 ----------
 SCREEN_W, SCREEN_H = 1200, 760
@@ -159,8 +211,8 @@ class MetroGame:
         pygame.display.set_caption("Mini Metro · 简洁地铁模拟")
         self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("Microsoft YaHei,SimHei,PingFang SC,Heiti SC,Noto Sans CJK SC,WenQuanYi Micro Hei,Arial", 18)
-        self.big_font = pygame.font.SysFont("Microsoft YaHei,SimHei,PingFang SC,Heiti SC,Noto Sans CJK SC,WenQuanYi Micro Hei,Arial", 36, bold=True)
+        self.font = load_font(18)
+        self.big_font = load_font(36, bold=True)
         self.reset()
 
     # ---- 初始化 / 重置 ----
