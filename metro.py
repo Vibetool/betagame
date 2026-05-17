@@ -845,20 +845,29 @@ class MetroGame:
         # 好评单独画一段, 满足配色需求
         r_surf = self.font.render(rating_label, True, rating_color)
         self.screen.blit(r_surf, (16, 38))
-        hint = "左键拖动连线 · 端点可延伸 · 右键删除站 · T 切换形态 · 空格暂停 · +/- 调速 · R 重开"
+        hint = "左键拖动连线 · 端点可延伸 · 右键长按拖动站 · T 切换形态 · 空格暂停 · +/- 调速 · R 重开"
         s = self.font.render(hint, True, (130, 130, 135))
         self.screen.blit(s, (SCREEN_W - s.get_width() - 16, 22))
-        # 左下角: 时间 (24 真实分钟 = 1 游戏日, 1 真实秒 = 1 游戏分钟)
+        # 左下角: 署名
+        powered_surf = self.font.render("Powered by 江星野", True, (130, 130, 135))
+        self.screen.blit(powered_surf, (16, SCREEN_H - powered_surf.get_height() - 10))
+        # 时间显示在窗口标题栏 (避免和系统按钮重叠 -> 限制总长度)
+        self._update_window_title()
+
+    def _update_window_title(self):
         total_min = int(self.time)
         day = total_min // (24 * 60) + 1
         hour = (total_min // 60) % 24
         minute = total_min % 60
-        clock_txt = f"第 {day} 日  {hour:02d}:{minute:02d}"
-        clock_surf = self.big_font.render(clock_txt, True, TEXT_COLOR)
-        bg = pygame.Surface((clock_surf.get_width() + 20, clock_surf.get_height() + 8), pygame.SRCALPHA)
-        bg.fill((255, 255, 255, 210))
-        self.screen.blit(bg, (10, SCREEN_H - clock_surf.get_height() - 14))
-        self.screen.blit(clock_surf, (20, SCREEN_H - clock_surf.get_height() - 10))
+        # 只在分钟变化时刷新标题, 减少 OS 调用
+        new_minute_key = (day, hour, minute)
+        if getattr(self, "_last_title_key", None) == new_minute_key:
+            return
+        self._last_title_key = new_minute_key
+        # 简洁标题, 给窗口按钮留足空间
+        pygame.display.set_caption(
+            f"Mini Metro · 简洁地铁模拟   |   第 {day} 日  {hour:02d}:{minute:02d}"
+        )
 
     def _draw_center_text(self, text, color):
         surf = self.big_font.render(text, True, color)
