@@ -167,7 +167,6 @@ class Station:
     y: float
     shape: str
     passengers: List[str] = field(default_factory=list)
-    overload_timer: float = 0.0
     spawn_timer: float = 0.0
     spawn_interval: float = 8.0
     zone_kind: str = "normal"   # 'high' / 'low' / 'normal'
@@ -281,6 +280,10 @@ class MetroGame:
         self.drag_line_idx: Optional[int] = None   # 若从端点开始延伸, 标记延伸的线
         self.drag_mouse_pos: Tuple[int, int] = (0, 0)
         self.drag_endpoint_side: int = 1  # 1 末端, -1 首端 (延伸方向)
+        # 右键拖动 (移动车站) 状态
+        self.right_drag_station: Optional[int] = None
+        self.right_drag_origin: Tuple[float, float] = (0.0, 0.0)
+        self.right_drag_moved: bool = False
 
     # ---- 站点生成 ----
     def _spawn_interval_for(self, x: float, y: float) -> Tuple[float, str]:
@@ -387,10 +390,13 @@ class MetroGame:
             self._on_left_down(ev.pos)
         elif ev.type == pygame.MOUSEMOTION:
             self.drag_mouse_pos = ev.pos
+            self._on_motion(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1:
             self._on_left_up(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 3:
-            self._on_right_click(ev.pos)
+            self._on_right_down(ev.pos)
+        elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 3:
+            self._on_right_up(ev.pos)
 
     def _on_left_down(self, pos):
         si = self._station_at(*pos)
@@ -455,17 +461,48 @@ class MetroGame:
         self.drag_from_station = None
         self.drag_line_idx = None
 
-    def _on_right_click(self, pos):
+    # ---- 右键: 短点击=删除经过该站的线; 长按拖动=移动车站 ----
+    RIGHT_DRAG_THRESHOLD = 5  # 鼠标位移超过该像素阈值才视为"拖动"
+
+    def _on_right_down(self, pos):
         si = self._station_at(*pos)
         if si is None:
+            self.right_drag_station = None
             return
-        # 删除所有经过该站的线路 (简化操作)
+        self.right_drag_station = si
+        self.right_drag_origin = (float(pos[0]), float(pos[1]))
+        self.right_drag_moved = False
+
+    def _on_motion(self, pos):
+        if self.right_drag_station is None:
+            return
+        dx = pos[0] - self.right_drag_origin[0]
+        dy = pos[1] - self.right_drag_origin[1]
+        if not self.right_drag_moved:
+            if dx * dx + dy * dy < self.RIGHT_DRAG_THRESHOLD ** 2:
+                return
+            self.right_drag_moved = True
+        # 拖动: 直接把站台中心放到鼠标位置, 限制在可见区域内
+        s = self.stations[self.right_drag_station]
+        margin = 20
+        s.x = max(margin, min(SCREEN_W - margin, float(pos[0])))
+        s.y = max(HUD_H + margin, min(SCREEN_H - margin, float(pos[1])))
+
+    def _on_right_up(self, pos):
+        if self.right_drag_station is None:
+            return
+        if self.right_drag_moved:
+            # 拖动结束, 不删除
+            self.right_drag_station = None
+            self.right_drag_moved = False
+            return
+        # 未发生拖动 -> 视为短点击, 沿用原"删除经过该站的线路"行为
+        si = self.right_drag_station
+        self.right_drag_station = None
         new_lines = []
         for line in self.lines:
             if si in line.stations:
-                # 回收线路
                 self.available_lines += 1
-                # 列车上的乘客丢回相邻站 (或丢弃)
                 continue
             new_lines.append(line)
         self.lines = new_lines
@@ -503,19 +540,10 @@ class MetroGame:
                 weights = [SHAPE_WEIGHTS[SHAPES.index(sh)] for sh in others]
                 s.passengers.append(random.choices(others, weights=weights, k=1)[0])
 
-        # 过载检测 + 好评衰减
-        overloaded = 0
-        for s in self.stations:
-            if len(s.passengers) > STATION_CAPACITY:
-                s.overload_timer += dt
-                overloaded += 1
-                if s.overload_timer >= STATION_OVERLOAD_TIME:
-                    self.game_over = True
-                    return
-            else:
-                s.overload_timer = max(0.0, s.overload_timer - dt * 0.5)
-        if overloaded > 0:
-            self.rating = max(0.0, self.rating - RATING_DROP_PER_OVERLOAD_SEC * overloaded * dt)
+        # 拥挤好评衰减 (人数无上限, 不再因过载游戏结束)
+        crowded = sum(1 for s in self.stations if len(s.passengers) > STATION_CAPACITY)
+        if crowded > 0:
+            self.rating = max(0.0, self.rating - RATING_DROP_PER_OVERLOAD_SEC * crowded * dt)
 
         # 列车运动
         for li, line in enumerate(self.lines):
@@ -681,12 +709,6 @@ class MetroGame:
         for i, s in enumerate(self.stations):
             angle = self._station_orientation(i)
             self._draw_platforms(s, angle)
-            # 过载警示环
-            if s.overload_timer > 0.1:
-                ratio = min(1.0, s.overload_timer / STATION_OVERLOAD_TIME)
-                r = PLATFORM_GAP + PLATFORM_W + 12 + math.sin(self.time * 6) * 1.5
-                pygame.draw.circle(self.screen, DANGER_COLOR,
-                                   (int(s.x), int(s.y)), int(r), max(2, int(2 + ratio * 4)))
             self._draw_passengers_on_platforms(s, angle)
             self._draw_station_label(s)
 
