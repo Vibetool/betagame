@@ -25,17 +25,10 @@ import pygame
 
 def load_font(size: int, bold: bool = False) -> pygame.font.Font:
     """跨平台中文字体加载。
-    优先尝试 pygame.font.SysFont; 失败 (Windows 注册表 bug 等) 时
-    回退到按系统已知路径直接加载字体文件; 最终 fallback 到 pygame 默认字体。
+
+    策略: 先按系统已知文件路径加载真正含 CJK 字形的字体, 这是渲染中文最可靠的方式。
+    只在所有文件路径都不存在时, 才退回 pygame.font.SysFont; 最终再回到默认字体。
     """
-    family = ("Microsoft YaHei,SimHei,PingFang SC,Heiti SC,"
-              "Noto Sans CJK SC,WenQuanYi Micro Hei,Arial")
-    try:
-        f = pygame.font.SysFont(family, size, bold=bold)
-        if f is not None:
-            return f
-    except Exception:
-        pass
     candidates: List[str] = []
     if sys.platform.startswith("win"):
         win_root = os.environ.get("SystemRoot", r"C:\Windows")
@@ -48,9 +41,15 @@ def load_font(size: int, bold: bool = False) -> pygame.font.Font:
             os.path.join(fdir, "arial.ttf"),
         ]
     elif sys.platform == "darwin":
+        # 不同 macOS 版本 PingFang 路径不一致, 多列几个候选;
+        # Hiragino Sans GB / STHeiti / Arial Unicode 都自带 CJK 字形
         candidates = [
             "/System/Library/Fonts/PingFang.ttc",
+            "/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
             "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
             "/Library/Fonts/Arial Unicode.ttf",
         ]
     else:
@@ -68,6 +67,16 @@ def load_font(size: int, bold: bool = False) -> pygame.font.Font:
                 return f
             except Exception:
                 continue
+    # 文件路径全失败 -> SysFont 兜底
+    try:
+        family = ("Microsoft YaHei,SimHei,PingFang SC,Heiti SC,Hiragino Sans GB,"
+                  "Noto Sans CJK SC,WenQuanYi Micro Hei,Arial Unicode MS,Arial")
+        f = pygame.font.SysFont(family, size, bold=bold)
+        if f is not None:
+            return f
+    except Exception:
+        pass
+    # 最终 fallback
     f = pygame.font.Font(None, size)
     if bold:
         f.set_bold(True)
