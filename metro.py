@@ -212,6 +212,14 @@ class MetroGame:
         self.clock = pygame.time.Clock()
         self.font = load_font(18)
         self.big_font = load_font(36, bold=True)
+        self.title_font = load_font(72, bold=True)
+        self.sub_font = load_font(22, bold=False)
+        # 状态机: 'home' (开始页) / 'play' (进行中)
+        self.state = "home"
+        self.mode = "classic"  # 'classic' / 'normal'
+        # 首页两只鸟的点击区域 (运行时填充)
+        self._home_bird_rects: List[Tuple[pygame.Rect, str]] = []
+        self._home_hover_mode: Optional[str] = None
         self.reset()
 
     # ---- 初始化 / 重置 ----
@@ -369,6 +377,30 @@ class MetroGame:
         if ev.type == pygame.QUIT:
             pygame.quit()
             sys.exit(0)
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+            if self.state == "play":
+                # 返回首页
+                self.state = "home"
+                return
+            pygame.quit()
+            sys.exit(0)
+        # ---- 首页输入 ----
+        if self.state == "home":
+            if ev.type == pygame.MOUSEMOTION:
+                self._home_hover_mode = None
+                for rect, mode in self._home_bird_rects:
+                    if rect.collidepoint(ev.pos):
+                        self._home_hover_mode = mode
+                        break
+            elif ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                for rect, mode in self._home_bird_rects:
+                    if rect.collidepoint(ev.pos):
+                        self.mode = mode
+                        self.reset()
+                        self.state = "play"
+                        return
+            return
+        # ---- 游戏中按键 ----
         if ev.type == pygame.KEYDOWN:
             if ev.key == pygame.K_SPACE:
                 self.paused = not self.paused
@@ -379,11 +411,10 @@ class MetroGame:
             elif ev.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
                 self.speed_scale = max(0.25, self.speed_scale - 0.25)
             elif ev.key == pygame.K_t:
-                # 切换站台形态
                 self.platform_style = "island" if self.platform_style == "side" else "side"
-            elif ev.key == pygame.K_ESCAPE:
-                pygame.quit()
-                sys.exit(0)
+            elif ev.key == pygame.K_h:
+                self.state = "home"
+                return
         if self.game_over:
             return
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
@@ -507,8 +538,25 @@ class MetroGame:
             new_lines.append(line)
         self.lines = new_lines
 
+    # ---- 时段客流系数 ----
+    def _passenger_rate_multiplier(self) -> float:
+        """根据游戏内时间和当前模式返回乘客生成速率倍数。
+        - 21:00 ~ 次日 06:00 (两种模式): × 0.7 (夜间 -30%)
+        - 12:00 ~ 13:00      (仅正常模式): × 0.8 (午间 -20%)
+        """
+        total_min = int(self.time)
+        hour = (total_min // 60) % 24
+        mult = 1.0
+        if hour >= 21 or hour < 6:
+            mult *= 0.7
+        if self.mode == "normal" and hour == 12:
+            mult *= 0.8
+        return mult
+
     # ---- 更新 ----
     def update(self, dt: float):
+        if self.state != "play":
+            return
         if self.paused or self.game_over:
             return
         dt *= self.speed_scale
@@ -530,9 +578,11 @@ class MetroGame:
                 self.available_lines += 1
             self.reward_alt = 1 - self.reward_alt
 
-        # 站点生成乘客
+        # 站点生成乘客 (按时段系数缩放)
+        rate_mult = self._passenger_rate_multiplier()
+        eff_dt = dt * rate_mult
         for s in self.stations:
-            s.spawn_timer += dt
+            s.spawn_timer += eff_dt
             if s.spawn_timer >= s.spawn_interval:
                 s.spawn_timer = 0.0
                 # 生成一个目的形状, 不能是本站形状
@@ -629,6 +679,10 @@ class MetroGame:
 
     # ---- 绘制 ----
     def draw(self):
+        if self.state == "home":
+            self._draw_home()
+            pygame.display.flip()
+            return
         self.screen.fill(BG_COLOR)
         self._draw_lines()
         self._draw_drag_preview()
@@ -640,6 +694,122 @@ class MetroGame:
         if self.game_over:
             self._draw_center_text(f"游戏结束  送达乘客: {self.score}  按 R 重开", DANGER_COLOR)
         pygame.display.flip()
+
+    # ---- 首页 ----
+    def _draw_home(self):
+        self.screen.fill((250, 248, 240))
+        self._draw_home_rails()
+        # 标题 - 上偏中
+        title = self.title_font.render("Mini Metro", True, (35, 35, 45))
+        title_rect = title.get_rect(center=(SCREEN_W // 2, 150))
+        # 标题下方一条彩色装饰短线
+        self.screen.blit(title, title_rect)
+        accent = pygame.Rect(0, 0, 120, 5)
+        accent.center = (SCREEN_W // 2, title_rect.bottom + 14)
+        pygame.draw.rect(self.screen, (216, 27, 27), accent, border_radius=2)
+        sub = self.sub_font.render("简洁地铁模拟  ·  选择模式", True, (110, 110, 120))
+        self.screen.blit(sub, sub.get_rect(center=(SCREEN_W // 2, title_rect.bottom + 46)))
+        # 两只鸟
+        self._home_bird_rects = []
+        bird_y = SCREEN_H // 2 + 60
+        positions = [
+            (SCREEN_W // 3, bird_y, (32, 95, 191), "classic", "经典模式",
+             "夜间 21:00–06:00 客流 −30%"),
+            (SCREEN_W * 2 // 3, bird_y, (216, 27, 27), "normal", "正常模式",
+             "夜间 −30%  ·  午间 12:00–13:00 客流 −20%"),
+        ]
+        for cx, cy, color, mode, label, desc in positions:
+            hover = (self._home_hover_mode == mode)
+            rect = pygame.Rect(cx - 150, cy - 90, 300, 220)
+            # 选项卡片背景
+            if hover:
+                card_bg = (255, 255, 255)
+                pygame.draw.rect(self.screen, card_bg, rect, border_radius=14)
+                pygame.draw.rect(self.screen, color, rect, width=3, border_radius=14)
+            else:
+                pygame.draw.rect(self.screen, (255, 255, 255), rect, border_radius=14)
+                pygame.draw.rect(self.screen, (220, 220, 225), rect, width=2, border_radius=14)
+            # 鸟
+            self._draw_bird(cx, cy - 10, color, scale=1.0 + (0.08 if hover else 0))
+            # 文字
+            lab = self.big_font.render(label, True, color if hover else (35, 35, 45))
+            self.screen.blit(lab, lab.get_rect(center=(cx, cy + 70)))
+            d = self.font.render(desc, True, (110, 110, 120))
+            self.screen.blit(d, d.get_rect(center=(cx, cy + 100)))
+            self._home_bird_rects.append((rect, mode))
+        # 底部署名 + 提示
+        tip = self.font.render("点击一只鸟开始  ·  游戏中按 H 返回首页  ·  ESC 退出",
+                               True, (140, 140, 150))
+        self.screen.blit(tip, tip.get_rect(center=(SCREEN_W // 2, SCREEN_H - 50)))
+        powered_surf = self.font.render("Powered by 江星野", True, (140, 140, 150))
+        self.screen.blit(powered_surf, (16, SCREEN_H - powered_surf.get_height() - 10))
+
+    def _draw_home_rails(self):
+        """背景: 三条横向铁轨。轨枕 + 双轨, 颜色偏淡当作底纹。"""
+        rail_color = (170, 170, 180)
+        tie_color = (155, 130, 100)
+        for row in range(3):
+            cy = 290 + row * 130
+            # 轨枕 (在双轨之间), 每 28px 一根
+            for x in range(20, SCREEN_W - 20, 28):
+                pygame.draw.rect(self.screen, tie_color, (x, cy - 9, 18, 18), border_radius=1)
+            # 双轨
+            pygame.draw.line(self.screen, rail_color, (0, cy - 11), (SCREEN_W, cy - 11), 3)
+            pygame.draw.line(self.screen, rail_color, (0, cy + 11), (SCREEN_W, cy + 11), 3)
+
+    def _draw_bird(self, cx: float, cy: float, color: Tuple[int, int, int], scale: float = 1.0):
+        """画一只简洁几何小鸟 (面朝右)。"""
+        def s(v): return v * scale
+        outline = (35, 35, 45)
+        # 身体 (椭圆)
+        body_rect = pygame.Rect(0, 0, int(s(110)), int(s(70)))
+        body_rect.center = (int(cx), int(cy))
+        pygame.draw.ellipse(self.screen, color, body_rect)
+        pygame.draw.ellipse(self.screen, outline, body_rect, 2)
+        # 尾巴 (左侧三角)
+        tail = [
+            (cx - s(55), cy - s(5)),
+            (cx - s(90), cy - s(20)),
+            (cx - s(78), cy + s(8)),
+        ]
+        pygame.draw.polygon(self.screen, color, tail)
+        pygame.draw.polygon(self.screen, outline, tail, 2)
+        # 翅膀
+        wing = [
+            (cx - s(15), cy - s(5)),
+            (cx + s(20), cy - s(10)),
+            (cx + s(8), cy + s(18)),
+            (cx - s(20), cy + s(12)),
+        ]
+        # 翅膀稍微深一点的同色调
+        wc = tuple(max(0, c - 30) for c in color)
+        pygame.draw.polygon(self.screen, wc, wing)
+        pygame.draw.polygon(self.screen, outline, wing, 2)
+        # 头 (右上圆)
+        head_r = int(s(26))
+        hx, hy = int(cx + s(40)), int(cy - s(22))
+        pygame.draw.circle(self.screen, color, (hx, hy), head_r)
+        pygame.draw.circle(self.screen, outline, (hx, hy), head_r, 2)
+        # 喙 (橙色三角)
+        beak = [
+            (hx + s(18), hy - s(2)),
+            (hx + s(42), hy),
+            (hx + s(18), hy + s(8)),
+        ]
+        pygame.draw.polygon(self.screen, (245, 174, 26), beak)
+        pygame.draw.polygon(self.screen, outline, beak, 2)
+        # 眼睛
+        pygame.draw.circle(self.screen, (255, 255, 255), (hx + int(s(6)), hy - int(s(4))), int(s(6)))
+        pygame.draw.circle(self.screen, outline, (hx + int(s(6)), hy - int(s(4))), int(s(6)), 1)
+        pygame.draw.circle(self.screen, outline, (hx + int(s(8)), hy - int(s(4))), int(s(3)))
+        # 双脚
+        for foot_dx in (-s(8), s(14)):
+            pygame.draw.line(self.screen, outline,
+                             (cx + foot_dx, cy + s(32)),
+                             (cx + foot_dx, cy + s(46)), 2)
+            pygame.draw.line(self.screen, outline,
+                             (cx + foot_dx - s(4), cy + s(46)),
+                             (cx + foot_dx + s(5), cy + s(46)), 2)
 
     def _draw_lines(self):
         for line in self.lines:
@@ -835,7 +1005,12 @@ class MetroGame:
         if self.rating < RATING_BLOCK_NEW_STATION:
             rating_label += " (新站已暂停)"
         style_label = "港式岛台" if self.platform_style == "island" else "两侧站台"
-        txt = (f"送达: {self.score}    "
+        mode_label = "经典" if self.mode == "classic" else "正常"
+        rate_mult = self._passenger_rate_multiplier()
+        if rate_mult < 0.999:
+            mode_label += f" (客流 x{rate_mult:.2f})"
+        txt = (f"模式: {mode_label}    "
+               f"送达: {self.score}    "
                f"可用线路: {self.available_lines}    "
                f"可用车厢: {self.available_carriages}    "
                f"车站: {len(self.stations)}    "
@@ -845,7 +1020,7 @@ class MetroGame:
         # 好评单独画一段, 满足配色需求
         r_surf = self.font.render(rating_label, True, rating_color)
         self.screen.blit(r_surf, (16, 38))
-        hint = "左键拖动连线 · 端点可延伸 · 右键长按拖动站 · T 切换形态 · 空格暂停 · +/- 调速 · R 重开"
+        hint = "左键连线 · 端点延伸 · 右键长按拖动站 · T 切站台 · 空格暂停 · +/− 调速 · R 重开 · H 首页"
         s = self.font.render(hint, True, (130, 130, 135))
         self.screen.blit(s, (SCREEN_W - s.get_width() - 16, 22))
         # 左下角: 署名
