@@ -1,21 +1,27 @@
-"""pygbag / desktop 入口。
-
-pygbag 的运行时模板硬编码了寻找 assets/main.py 作为脚本入口,
-所以这里做一个薄壳, 委托给 metro.main()。
-
-注意: 不要把 asyncio.run 包在 `if __name__ == "__main__":` 里 —
-pygbag 在加载 main.py 时会改写顶层的 `asyncio.run(...)` 让它不阻塞,
-一旦套进 if 块, 这个改写可能错过, 导致 WASM 端永远卡在 Loading。
-"""
+"""pygbag / desktop 入口。"""
 import asyncio
 import sys
+import traceback
 
-print("[main.py] starting", flush=True)
-sys.stdout.flush()
+# 用 document.title 当诊断通道, 不依赖 console
+def _trace(stage):
+    print(f"[main.py] {stage}", flush=True)
+    sys.stdout.flush()
+    try:
+        import platform as _p
+        _p.window.document.title = f"booting: {stage}"
+    except Exception:
+        pass
 
-import metro
+_trace("starting")
 
-print("[main.py] metro imported, entering game loop", flush=True)
-sys.stdout.flush()
-
-asyncio.run(metro.main())
+try:
+    import pygame  # noqa: F401  -- 在 pygbag 里这个会触发解释器+SDL2 加载
+    _trace("pygame imported")
+    import metro
+    _trace("metro imported")
+    asyncio.run(metro.main())
+except Exception as e:
+    _trace(f"FATAL: {type(e).__name__}: {e}")
+    traceback.print_exc()
+    raise

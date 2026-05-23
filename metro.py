@@ -1205,6 +1205,20 @@ class MetroGame:
         """async 循环, 兼容 pygbag (浏览器 WASM)。
         每帧 await asyncio.sleep(0) 让出控制权给浏览器事件循环。
         """
+        # 立即先画一帧, 验证渲染管线是否工作
+        print("[metro] first draw before loop", flush=True)
+        try:
+            import platform as _p
+            _p.window.document.title = "metro: first draw"
+        except Exception:
+            pass
+        self.draw()
+        print("[metro] first draw done, entering main loop", flush=True)
+        try:
+            import platform as _p
+            _p.window.document.title = "Mini Metro · 简洁地铁模拟"
+        except Exception:
+            pass
         while True:
             dt = self.clock.tick(FPS) / 1000.0
             for ev in pygame.event.get():
@@ -1218,11 +1232,22 @@ class MetroGame:
         asyncio.run(self.run_async())
 
 
+def _wtitle(s):
+    """把状态写到 document.title (WASM) — 不依赖 console 输出。"""
+    try:
+        import platform as _p
+        _p.window.document.title = s
+    except Exception:
+        pass
+
+
 async def main():
     """pygbag 期望的 async main 入口。"""
-    print("[metro] main() entered, constructing MetroGame", flush=True)
+    print("[metro] main() entered", flush=True)
+    _wtitle("metro: building game")
     g = MetroGame()
-    print("[metro] entering run_async loop", flush=True)
+    print("[metro] MetroGame built, entering run_async", flush=True)
+    _wtitle("metro: entering loop")
     await g.run_async()
 
 
