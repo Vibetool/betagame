@@ -3,7 +3,43 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mini Metro · 简洁地铁模拟</title>
+<title>mini Metro 2026 5 12 — Mini Metro · 简洁地铁模拟 (浏览器版)</title>
+<meta name="description" content="mini Metro 2026 5 12: 一款浏览器中即点即玩的简洁地铁线路模拟游戏 (Mini Metro 风格), 支持经典模式与正常模式, 含氪金商城、限时速度加成、车厢扩容。Powered by 江星野。">
+<meta name="keywords" content="mini Metro 2026 5 12, mini metro, Mini Metro 2026, mini metro 5 12, 简洁地铁模拟, 地铁模拟游戏, 地铁线路游戏, 浏览器地铁游戏, mini metro web, mini metro 中文, 江星野">
+<meta name="author" content="江星野">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="googlebot" content="index, follow">
+<meta name="bingbot" content="index, follow">
+<meta name="baiduspider" content="index, follow">
+<link rel="canonical" href="https://vibetool.github.io/betagame/">
+<!-- Open Graph (Facebook / 微信分享缩略图) -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="mini Metro 2026 5 12 — Mini Metro · 简洁地铁模拟">
+<meta property="og:description" content="浏览器即点即玩的简洁地铁线路模拟游戏。两种模式 · 时段客流变化 · 氪金商城。">
+<meta property="og:url" content="https://vibetool.github.io/betagame/">
+<meta property="og:site_name" content="Mini Metro · 简洁地铁模拟">
+<meta property="og:locale" content="zh_CN">
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="mini Metro 2026 5 12 — Mini Metro · 简洁地铁模拟">
+<meta name="twitter:description" content="浏览器中即点即玩的简洁地铁线路模拟游戏。">
+<!-- 结构化数据 (帮助 Google 识别这是个 VideoGame) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "VideoGame",
+  "name": "Mini Metro · 简洁地铁模拟",
+  "alternateName": ["mini Metro 2026 5 12", "Mini Metro 简洁地铁模拟"],
+  "description": "浏览器中即点即玩的简洁地铁线路模拟游戏 (Mini Metro 风格), 经典/正常两种模式, 含氪金商城与限时加成。",
+  "url": "https://vibetool.github.io/betagame/",
+  "inLanguage": "zh-CN",
+  "applicationCategory": "Game",
+  "operatingSystem": "Web",
+  "author": { "@type": "Person", "name": "江星野" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+  "keywords": "mini Metro 2026 5 12, 简洁地铁模拟, 地铁线路游戏"
+}
+</script>
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%;
@@ -20,6 +56,16 @@
     width: 100%; height: 100%;
     display: flex; align-items: center; justify-content: center;
   }
+  /* 屏幕阅读器/爬虫可见, 视觉上不显示 */
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap;
+    border: 0;
+  }
   canvas#game {
     display: block;
     background: #fff;
@@ -32,7 +78,33 @@
 </style>
 </head>
 <body>
-<div id="stage"><canvas id="game" width="1200" height="760"></canvas></div>
+<header class="sr-only">
+  <h1>mini Metro 2026 5 12 — Mini Metro · 简洁地铁模拟</h1>
+  <p>
+    Mini Metro · 简洁地铁模拟 是一款在浏览器中即点即玩的地铁线路模拟游戏 (mini metro 风格)。
+    玩家手动建造地铁站, 拖动连接线路, 让列车沿着线路运送乘客到对应形状的目的地。
+    支持经典模式与正常模式 —— 夜间 21:00 到次日 06:00 客流减 30%, 正常模式额外在午间 12:00 到 13:00 客流减 20%。
+    游戏内置氪金商城: 每送达 100 次乘客获得 1 枚金币, 可购买 10/20 分钟限时速度加成 (+30% / +50%) 或 10 分钟每车厢载客 +1。
+    经典模式与正常模式累计送达次数共享, 金币与购买记录在浏览器 localStorage 跨会话保留。
+  </p>
+  <h2>关键词 / Keywords</h2>
+  <p>mini Metro 2026 5 12, mini metro, Mini Metro 简洁地铁模拟, 浏览器地铁游戏, 地铁线路模拟, 地铁经营游戏, 江星野</p>
+  <h2>玩法说明</h2>
+  <ul>
+    <li>左键空地建站; 左键拖动两站之间连线; 拖到线路端点上延伸线路</li>
+    <li>右键长按拖动可移动车站; 右键短点击删除经过该站的所有线路</li>
+    <li>空格暂停, +/- 调速, R 重新开始, H 返回首页, ESC 退出</li>
+    <li>每 14 秒新增 1 个可建站名额; 每 30 秒轮换发放新车厢或新线路</li>
+  </ul>
+  <p>作者: 江星野 (Powered by 江星野)。访问: https://vibetool.github.io/betagame/</p>
+</header>
+<noscript>
+  <p style="padding:20px;font-family:sans-serif">
+    Mini Metro · 简洁地铁模拟 (mini Metro 2026 5 12) — 需要启用 JavaScript 才能游玩。
+    这是一款浏览器中即点即玩的地铁线路模拟游戏, 由 江星野 制作。
+  </p>
+</noscript>
+<div id="stage"><canvas id="game" width="1200" height="760" aria-label="Mini Metro 简洁地铁模拟游戏画面"></canvas></div>
 <script>
 "use strict";
 
