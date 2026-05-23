@@ -149,11 +149,6 @@ CAR_COLORS = [
 # 时钟: 24 (真实) 分钟 = 1 游戏日 → 1 真实秒 = 1 游戏分钟
 DAY_REAL_SECONDS = 24 * 60
 
-# 好评
-RATING_INITIAL = 100.0
-RATING_BLOCK_NEW_STATION = 20.0    # 低于此值不再生成新站
-RATING_PER_DELIVERY = 0.6
-RATING_DROP_PER_OVERLOAD_SEC = 0.7
 
 # 乘客流量权重 (周边进入 8 / 下站换乘 30 / 剩下出站)
 FLOW_W_BOARD = 8
@@ -245,7 +240,6 @@ class MetroGame:
         self.station_grant_timer = 0.0
         self.reward_timer = 0.0
         self.score = 0
-        self.rating = RATING_INITIAL
         self.paused = False
         self.game_over = False
         self.speed_scale = 1.0
@@ -341,11 +335,8 @@ class MetroGame:
         return True
 
     def _place_station(self, x: float, y: float) -> bool:
-        """在 (x,y) 手动建造一个新车站, 成功返回 True。
-        正常模式下若好评过低 -> 拒绝。"""
+        """在 (x,y) 手动建造一个新车站, 成功返回 True。"""
         if self.available_stations <= 0:
-            return False
-        if self.mode == "normal" and self.rating < RATING_BLOCK_NEW_STATION:
             return False
         if not self._can_place_station_at(x, y):
             return False
@@ -587,9 +578,7 @@ class MetroGame:
         # 周期发放可建车站预算 (手动放置, 不再自动生成新站)
         if self.station_grant_timer >= NEW_STATION_INTERVAL:
             self.station_grant_timer = 0.0
-            # 正常模式: 好评太低时暂停发放; 经典模式无好评限制
-            if self.mode == "classic" or self.rating >= RATING_BLOCK_NEW_STATION:
-                self.available_stations += 1
+            self.available_stations += 1
 
         # 奖励
         if self.reward_timer >= REWARD_INTERVAL:
@@ -612,11 +601,6 @@ class MetroGame:
                 weights = [SHAPE_WEIGHTS[SHAPES.index(sh)] for sh in others]
                 s.passengers.append(random.choices(others, weights=weights, k=1)[0])
 
-        # 拥挤好评衰减 (仅正常模式; 经典模式无好评机制)
-        if self.mode == "normal":
-            crowded = sum(1 for s in self.stations if len(s.passengers) > STATION_CAPACITY)
-            if crowded > 0:
-                self.rating = max(0.0, self.rating - RATING_DROP_PER_OVERLOAD_SEC * crowded * dt)
 
         # 列车运动
         for li, line in enumerate(self.lines):
@@ -678,18 +662,14 @@ class MetroGame:
 
     def _train_visit_station(self, tr: Train, line: Line, station_idx: int):
         s = self.stations[station_idx]
-        # 下客 (剩下出站): 形状匹配的乘客直接离开 -> 计分 + 加好评
+        # 下客 (剩下出站): 形状匹配的乘客直接离开 -> 计分
         new_passengers = []
-        delivered = 0
         for p in tr.passengers:
             if p == s.shape:
                 self.score += 1
-                delivered += 1
             else:
                 new_passengers.append(p)
         tr.passengers = new_passengers
-        if delivered and self.mode == "normal":
-            self.rating = min(100.0, self.rating + RATING_PER_DELIVERY * delivered)
         # 上客 (周边进入): 该线路能到的目的优先
         line_shapes = {self.stations[i].shape for i in line.stations}
         remaining = []
@@ -1039,17 +1019,9 @@ class MetroGame:
                 f"形态: {style_label}    "
                 f"速度: x{self.speed_scale:.2f}")
         self.screen.blit(self.font.render(row1, True, TEXT_COLOR), (16, 8))
-        # ---- 第二行: 可用线路 / 可用车厢 / (好评, 仅正常模式) ----
+        # ---- 第二行: 可用线路 / 可用车厢 ----
         row2 = f"可用线路: {self.available_lines}    可用车厢: {self.available_carriages}"
         self.screen.blit(self.font.render(row2, True, TEXT_COLOR), (16, mid_y + 5))
-        if self.mode == "normal":
-            rating_color = DANGER_COLOR if self.rating < RATING_BLOCK_NEW_STATION else TEXT_COLOR
-            rating_label = f"    好评: {int(self.rating)}"
-            if self.rating < RATING_BLOCK_NEW_STATION:
-                rating_label += " (新站已暂停)"
-            row2_w = self.font.size(row2)[0]
-            self.screen.blit(self.font.render(rating_label, True, rating_color),
-                             (16 + row2_w, mid_y + 5))
         # ---- 右侧: 提示, 单行放在第二行右侧, 避免与第一行重叠 ----
         hint = ("左键空地建站 · 站间拖线连线 · 端点延伸 · 右键长按拖动站 · "
                 "T 切站台 · 空格暂停 · +/− 调速 · R 重开 · H 首页")
