@@ -119,14 +119,11 @@ TRAIN_SPEED = 170.0          # +100 提速
 STATION_CAPACITY = 10        # 超过该数量 -> 进入过载倒计时
 STATION_OVERLOAD_TIME = 25.0
 
-# 站台外观
-PLATFORM_LEN = 56
-PLATFORM_W = 10
-PLATFORM_GAP = 9             # 线路中心 -> 站台内边的距离 (侧式)
-ISLAND_PLATFORM_W = 20       # 港式 (岛式) 中央站台宽度
-PLATFORM_FILL = (228, 228, 232)
-PLATFORM_EDGE = (90, 90, 95)
-PLATFORM_SAFETY = (245, 200, 60)   # 黄色安全线
+# 站台外观: 方形, 固定朝向, 不随线路旋转
+STATION_SQUARE_SIZE = 36
+STATION_BORDER_RADIUS = 4
+PLATFORM_FILL = (255, 255, 255)
+PLATFORM_EDGE = (45, 45, 55)
 
 NEW_STATION_INTERVAL = 14.0
 REWARD_INTERVAL = 30.0
@@ -244,9 +241,6 @@ class MetroGame:
         self.game_over = False
         self.speed_scale = 1.0
         self.reward_alt = 0
-        # 站台形态: 'side' 线路两侧站台 / 'island' 港式岛式站台
-        if not hasattr(self, "platform_style"):
-            self.platform_style = "side"
 
         # 生成 2 人多区 + 1 人少区
         self._generate_zones()
@@ -356,20 +350,6 @@ class MetroGame:
                 return i
         return None
 
-    def _station_orientation(self, idx: int) -> float:
-        """返回经过该站的线路方向 (弧度); 没有线路时默认水平 0。"""
-        s = self.stations[idx]
-        for line in self.lines:
-            if idx in line.stations:
-                pos = line.stations.index(idx)
-                if pos + 1 < len(line.stations):
-                    o = self.stations[line.stations[pos + 1]]
-                    return math.atan2(o.y - s.y, o.x - s.x)
-                if pos - 1 >= 0:
-                    o = self.stations[line.stations[pos - 1]]
-                    return math.atan2(s.y - o.y, s.x - o.x)
-        return 0.0
-
     def _line_segments(self, line: Line) -> List[Tuple[Tuple[float, float], Tuple[float, float]]]:
         segs = []
         for a, b in zip(line.stations, line.stations[1:]):
@@ -419,8 +399,6 @@ class MetroGame:
                 self.speed_scale = min(4.0, self.speed_scale + 0.25)
             elif ev.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
                 self.speed_scale = max(0.25, self.speed_scale - 0.25)
-            elif ev.key == pygame.K_t:
-                self.platform_style = "island" if self.platform_style == "side" else "side"
             elif ev.key == pygame.K_h:
                 self.state = "home"
                 return
@@ -879,97 +857,45 @@ class MetroGame:
             pygame.draw.polygon(self.screen, edge, pts, edge_w)
 
     def _draw_stations(self):
-        for i, s in enumerate(self.stations):
-            angle = self._station_orientation(i)
-            self._draw_platforms(s, angle)
-            self._draw_passengers_on_platforms(s, angle)
+        for s in self.stations:
+            self._draw_station_square(s)
+            self._draw_passengers_grid(s)
             self._draw_station_label(s)
 
-    def _draw_platforms(self, s: Station, angle: float):
-        if self.platform_style == "island":
-            self._draw_platform_island(s, angle)
-        else:
-            self._draw_platform_side(s, angle)
+    def _draw_station_square(self, s: Station):
+        """方形站台: 固定朝向, 不随线路旋转。"""
+        half = STATION_SQUARE_SIZE / 2
+        rect = pygame.Rect(int(s.x - half), int(s.y - half),
+                           STATION_SQUARE_SIZE, STATION_SQUARE_SIZE)
+        pygame.draw.rect(self.screen, PLATFORM_FILL, rect,
+                         border_radius=STATION_BORDER_RADIUS)
+        pygame.draw.rect(self.screen, PLATFORM_EDGE, rect, width=2,
+                         border_radius=STATION_BORDER_RADIUS)
 
-    def _draw_platform_side(self, s: Station, angle: float):
-        """形态: 线路两侧是站台"""
-        cosA, sinA = math.cos(angle), math.sin(angle)
-        perp_x, perp_y = -sinA, cosA
-        for side in (-1, 1):
-            off = side * (PLATFORM_GAP + PLATFORM_W / 2)
-            cx = s.x + perp_x * off
-            cy = s.y + perp_y * off
-            self._draw_rotated_rect(cx, cy, PLATFORM_LEN, PLATFORM_W, angle,
-                                    PLATFORM_FILL, edge=PLATFORM_EDGE, edge_w=2)
-            # 站台靠线路一侧的黄色安全线
-            sx = s.x + perp_x * (side * (PLATFORM_GAP + 1.5))
-            sy = s.y + perp_y * (side * (PLATFORM_GAP + 1.5))
-            half = PLATFORM_LEN / 2 - 4
-            x1 = sx + cosA * (-half)
-            y1 = sy + sinA * (-half)
-            x2 = sx + cosA * half
-            y2 = sy + sinA * half
-            pygame.draw.line(self.screen, PLATFORM_SAFETY, (x1, y1), (x2, y2), 2)
-
-    def _draw_platform_island(self, s: Station, angle: float):
-        """形态: 港式 (岛式) 中央站台, 列车从两侧通过"""
-        cosA, sinA = math.cos(angle), math.sin(angle)
-        # 中央一条宽站台
-        self._draw_rotated_rect(s.x, s.y, PLATFORM_LEN, ISLAND_PLATFORM_W, angle,
-                                PLATFORM_FILL, edge=PLATFORM_EDGE, edge_w=2)
-        perp_x, perp_y = -sinA, cosA
-        # 站台两个长边各画一条黄色安全线
-        half_w = ISLAND_PLATFORM_W / 2 - 2
-        half_l = PLATFORM_LEN / 2 - 4
-        for side in (-1, 1):
-            sx = s.x + perp_x * (side * half_w)
-            sy = s.y + perp_y * (side * half_w)
-            x1 = sx + cosA * (-half_l)
-            y1 = sy + sinA * (-half_l)
-            x2 = sx + cosA * half_l
-            y2 = sy + sinA * half_l
-            pygame.draw.line(self.screen, PLATFORM_SAFETY, (x1, y1), (x2, y2), 2)
-
-    def _draw_passengers_on_platforms(self, s: Station, angle: float):
+    def _draw_passengers_grid(self, s: Station):
+        """乘客图标按固定网格排在站台右下方; 不随线路方向变化。"""
         if not s.passengers:
             return
-        cosA, sinA = math.cos(angle), math.sin(angle)
-        perp_x, perp_y = -sinA, cosA
         spacing = PASSENGER_SIZE * 2 + 2
-        per_row = max(2, int((PLATFORM_LEN - 6) // spacing))
-        if self.platform_style == "island":
-            # 单一中央站台, 两排乘客
-            for k, p in enumerate(s.passengers):
-                col = k % per_row
-                row = k // per_row
-                along = -PLATFORM_LEN / 2 + spacing / 2 + col * spacing
-                radial = (-1 if row % 2 == 0 else 1) * (ISLAND_PLATFORM_W / 2 - PASSENGER_SIZE - 1)
-                cx = s.x + cosA * along + perp_x * radial
-                cy = s.y + sinA * along + perp_y * radial
-                self._draw_shape(p, cx, cy, PASSENGER_SIZE, (60, 60, 65), PASSENGER_OUTLINE, 1)
-            return
-        # 侧式: 偶/奇分到两侧站台
-        upper = [(i, p) for i, p in enumerate(s.passengers) if i % 2 == 0]
-        lower = [(i, p) for i, p in enumerate(s.passengers) if i % 2 == 1]
-        for group, side in ((upper, -1), (lower, 1)):
-            base_off = side * (PLATFORM_GAP + PLATFORM_W / 2)
-            for k, (_, p) in enumerate(group):
-                col = k % per_row
-                along = -PLATFORM_LEN / 2 + spacing / 2 + col * spacing
-                cx = s.x + cosA * along + perp_x * base_off
-                cy = s.y + sinA * along + perp_y * base_off
-                self._draw_shape(p, cx, cy, PASSENGER_SIZE, (60, 60, 65), PASSENGER_OUTLINE, 1)
+        cols = 5
+        start_x = s.x + STATION_SQUARE_SIZE / 2 + 6 + PASSENGER_SIZE
+        start_y = s.y - STATION_SQUARE_SIZE / 2 + PASSENGER_SIZE
+        for k, p in enumerate(s.passengers):
+            col = k % cols
+            row = k // cols
+            cx = start_x + col * spacing
+            cy = start_y + row * spacing
+            self._draw_shape(p, cx, cy, PASSENGER_SIZE, (60, 60, 65), PASSENGER_OUTLINE, 1)
 
     def _draw_station_label(self, s: Station):
+        """站台正上方显示乘客数字。"""
         n = len(s.passengers)
         is_full = n > STATION_CAPACITY
         color = DANGER_COLOR if is_full else TEXT_COLOR
         font = self.big_font if is_full else self.font
-        # 总在屏幕上方显示, 便于读数
         label = font.render(str(n), True, color)
-        y_off = -(PLATFORM_GAP + PLATFORM_W + 12)
+        y_off = -(STATION_SQUARE_SIZE / 2 + 14)
         rect = label.get_rect(center=(int(s.x), int(s.y + y_off)))
-        # 白底打底, 防止与线路重叠时看不清
         bg = pygame.Surface((rect.w + 8, rect.h + 4), pygame.SRCALPHA)
         bg.fill((255, 255, 255, 230))
         self.screen.blit(bg, (rect.x - 4, rect.y - 2))
@@ -1006,17 +932,15 @@ class MetroGame:
         # 行间分隔线 (浅色, 两行 HUD)
         mid_y = HUD_H // 2
         pygame.draw.line(self.screen, (235, 235, 238), (16, mid_y), (SCREEN_W - 16, mid_y), 1)
-        style_label = "港式岛台" if self.platform_style == "island" else "两侧站台"
         mode_label = "经典" if self.mode == "classic" else "正常"
         rate_mult = self._passenger_rate_multiplier()
         if rate_mult < 0.999:
             mode_label += f" (客流 x{rate_mult:.2f})"
-        # ---- 第一行: 模式 / 送达 / 车站 / 可建站 / 形态 / 速度 ----
+        # ---- 第一行: 模式 / 送达 / 车站 / 可建站 / 速度 ----
         row1 = (f"模式: {mode_label}    "
                 f"送达: {self.score}    "
                 f"车站: {len(self.stations)}    "
                 f"可建站: {self.available_stations}    "
-                f"形态: {style_label}    "
                 f"速度: x{self.speed_scale:.2f}")
         self.screen.blit(self.font.render(row1, True, TEXT_COLOR), (16, 8))
         # ---- 第二行: 可用线路 / 可用车厢 ----
@@ -1024,7 +948,7 @@ class MetroGame:
         self.screen.blit(self.font.render(row2, True, TEXT_COLOR), (16, mid_y + 5))
         # ---- 右侧: 提示, 单行放在第二行右侧, 避免与第一行重叠 ----
         hint = ("左键空地建站 · 站间拖线连线 · 端点延伸 · 右键长按拖动站 · "
-                "T 切站台 · 空格暂停 · +/− 调速 · R 重开 · H 首页")
+                "空格暂停 · +/− 调速 · R 重开 · H 首页")
         s = self.font.render(hint, True, (130, 130, 135))
         self.screen.blit(s, (SCREEN_W - s.get_width() - 16, mid_y + 5))
         # 左下角: 署名
