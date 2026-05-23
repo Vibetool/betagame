@@ -84,7 +84,7 @@ def load_font(size: int, bold: bool = False) -> pygame.font.Font:
 
 # ---------- 基础配置 ----------
 SCREEN_W, SCREEN_H = 1200, 760
-HUD_H = 60
+HUD_H = 78  # 两行 HUD
 FPS = 60
 
 BG_COLOR = (245, 244, 240)
@@ -132,6 +132,7 @@ NEW_STATION_INTERVAL = 14.0
 REWARD_INTERVAL = 30.0
 INITIAL_LINES = 3
 INITIAL_CARRIAGES = 3
+INITIAL_STATION_BUDGET = 2   # 起步可手动建造的车站数 (开局已自动放置 3 个区中心站)
 TRAIN_CAPACITY_BASE = 3      # 单节车厢载客 3
 CARRIAGE_CAPACITY = 3        # 附加车厢载客 3
 HIGH_DENSITY_SPAWN = 6.0     # 人多区中心: 6 秒/人
@@ -239,8 +240,9 @@ class MetroGame:
         self.available_lines = INITIAL_LINES
         self.available_carriages = 0
         self.spare_trains = 0
+        self.available_stations = INITIAL_STATION_BUDGET
         self.time = 0.0
-        self.spawn_station_timer = 0.0
+        self.station_grant_timer = 0.0
         self.reward_timer = 0.0
         self.score = 0
         self.rating = RATING_INITIAL
@@ -322,32 +324,39 @@ class MetroGame:
         kind = nearest.kind if nearest_d < 220 else "normal"
         return interval, kind
 
-    def _spawn_station(self, force_basic: bool = False):
-        # 好评过低不再生成新站
-        if self.rating < RATING_BLOCK_NEW_STATION:
+    # 玩家手动放置车站时的最小间距 (像素)
+    MIN_STATION_SPACING = STATION_RADIUS * 4
+
+    def _can_place_station_at(self, x: float, y: float) -> bool:
+        """检查坐标是否可放置新站: 不在 HUD 内、不越界、不与现有站太近。"""
+        if y < HUD_H + STATION_RADIUS:
             return False
-        margin = 50
-        top = HUD_H + margin
-        for _ in range(200):
-            x = random.uniform(margin, SCREEN_W - margin)
-            y = random.uniform(top, SCREEN_H - margin)
-            ok = True
-            for s in self.stations:
-                if (s.x - x) ** 2 + (s.y - y) ** 2 < (STATION_RADIUS * 5) ** 2:
-                    ok = False
-                    break
-            if ok:
-                if force_basic:
-                    shape = random.choice(SHAPES[:3])
-                else:
-                    shape = random.choices(SHAPES, weights=SHAPE_WEIGHTS, k=1)[0]
-                interval, kind = self._spawn_interval_for(x, y)
-                self.stations.append(Station(
-                    x=x, y=y, shape=shape,
-                    spawn_interval=interval, zone_kind=kind,
-                ))
-                return True
-        return False
+        if x < STATION_RADIUS or x > SCREEN_W - STATION_RADIUS:
+            return False
+        if y > SCREEN_H - STATION_RADIUS:
+            return False
+        for s in self.stations:
+            if (s.x - x) ** 2 + (s.y - y) ** 2 < self.MIN_STATION_SPACING ** 2:
+                return False
+        return True
+
+    def _place_station(self, x: float, y: float) -> bool:
+        """在 (x,y) 手动建造一个新车站, 成功返回 True。
+        正常模式下若好评过低 -> 拒绝。"""
+        if self.available_stations <= 0:
+            return False
+        if self.mode == "normal" and self.rating < RATING_BLOCK_NEW_STATION:
+            return False
+        if not self._can_place_station_at(x, y):
+            return False
+        shape = random.choices(SHAPES, weights=SHAPE_WEIGHTS, k=1)[0]
+        interval, kind = self._spawn_interval_for(x, y)
+        self.stations.append(Station(
+            x=x, y=y, shape=shape,
+            spawn_interval=interval, zone_kind=kind,
+        ))
+        self.available_stations -= 1
+        return True
 
     # ---- 工具 ----
     def _station_at(self, mx: float, my: float) -> Optional[int]:
@@ -441,6 +450,8 @@ class MetroGame:
     def _on_left_down(self, pos):
         si = self._station_at(*pos)
         if si is None:
+            # 空白区域 -> 手动建造一个车站
+            self._place_station(float(pos[0]), float(pos[1]))
             return
         # 是否为某条线的端点 -> 延伸该线
         for li, line in enumerate(self.lines):
@@ -570,13 +581,15 @@ class MetroGame:
             return
         dt *= self.speed_scale
         self.time += dt
-        self.spawn_station_timer += dt
+        self.station_grant_timer += dt
         self.reward_timer += dt
 
-        # 新增车站
-        if self.spawn_station_timer >= NEW_STATION_INTERVAL:
-            self.spawn_station_timer = 0.0
-            self._spawn_station()
+        # 周期发放可建车站预算 (手动放置, 不再自动生成新站)
+        if self.station_grant_timer >= NEW_STATION_INTERVAL:
+            self.station_grant_timer = 0.0
+            # 正常模式: 好评太低时暂停发放; 经典模式无好评限制
+            if self.mode == "classic" or self.rating >= RATING_BLOCK_NEW_STATION:
+                self.available_stations += 1
 
         # 奖励
         if self.reward_timer >= REWARD_INTERVAL:
@@ -599,10 +612,11 @@ class MetroGame:
                 weights = [SHAPE_WEIGHTS[SHAPES.index(sh)] for sh in others]
                 s.passengers.append(random.choices(others, weights=weights, k=1)[0])
 
-        # 拥挤好评衰减 (人数无上限, 不再因过载游戏结束)
-        crowded = sum(1 for s in self.stations if len(s.passengers) > STATION_CAPACITY)
-        if crowded > 0:
-            self.rating = max(0.0, self.rating - RATING_DROP_PER_OVERLOAD_SEC * crowded * dt)
+        # 拥挤好评衰减 (仅正常模式; 经典模式无好评机制)
+        if self.mode == "normal":
+            crowded = sum(1 for s in self.stations if len(s.passengers) > STATION_CAPACITY)
+            if crowded > 0:
+                self.rating = max(0.0, self.rating - RATING_DROP_PER_OVERLOAD_SEC * crowded * dt)
 
         # 列车运动
         for li, line in enumerate(self.lines):
@@ -674,7 +688,7 @@ class MetroGame:
             else:
                 new_passengers.append(p)
         tr.passengers = new_passengers
-        if delivered:
+        if delivered and self.mode == "normal":
             self.rating = min(100.0, self.rating + RATING_PER_DELIVERY * delivered)
         # 上客 (周边进入): 该线路能到的目的优先
         line_shapes = {self.stations[i].shape for i in line.stations}
@@ -1009,29 +1023,38 @@ class MetroGame:
     def _draw_hud(self):
         pygame.draw.rect(self.screen, HUD_BG, (0, 0, SCREEN_W, HUD_H))
         pygame.draw.line(self.screen, (220, 220, 220), (0, HUD_H), (SCREEN_W, HUD_H), 1)
-        rating_color = DANGER_COLOR if self.rating < RATING_BLOCK_NEW_STATION else TEXT_COLOR
-        rating_label = f"好评: {int(self.rating)}"
-        if self.rating < RATING_BLOCK_NEW_STATION:
-            rating_label += " (新站已暂停)"
+        # 行间分隔线 (浅色, 两行 HUD)
+        mid_y = HUD_H // 2
+        pygame.draw.line(self.screen, (235, 235, 238), (16, mid_y), (SCREEN_W - 16, mid_y), 1)
         style_label = "港式岛台" if self.platform_style == "island" else "两侧站台"
         mode_label = "经典" if self.mode == "classic" else "正常"
         rate_mult = self._passenger_rate_multiplier()
         if rate_mult < 0.999:
             mode_label += f" (客流 x{rate_mult:.2f})"
-        txt = (f"模式: {mode_label}    "
-               f"送达: {self.score}    "
-               f"可用线路: {self.available_lines}    "
-               f"可用车厢: {self.available_carriages}    "
-               f"车站: {len(self.stations)}    "
-               f"形态: {style_label}    "
-               f"速度: x{self.speed_scale:.2f}")
-        self.screen.blit(self.font.render(txt, True, TEXT_COLOR), (16, 18))
-        # 好评单独画一段, 满足配色需求
-        r_surf = self.font.render(rating_label, True, rating_color)
-        self.screen.blit(r_surf, (16, 38))
-        hint = "左键连线 · 端点延伸 · 右键长按拖动站 · T 切站台 · 空格暂停 · +/− 调速 · R 重开 · H 首页"
+        # ---- 第一行: 模式 / 送达 / 车站 / 可建站 / 形态 / 速度 ----
+        row1 = (f"模式: {mode_label}    "
+                f"送达: {self.score}    "
+                f"车站: {len(self.stations)}    "
+                f"可建站: {self.available_stations}    "
+                f"形态: {style_label}    "
+                f"速度: x{self.speed_scale:.2f}")
+        self.screen.blit(self.font.render(row1, True, TEXT_COLOR), (16, 8))
+        # ---- 第二行: 可用线路 / 可用车厢 / (好评, 仅正常模式) ----
+        row2 = f"可用线路: {self.available_lines}    可用车厢: {self.available_carriages}"
+        self.screen.blit(self.font.render(row2, True, TEXT_COLOR), (16, mid_y + 5))
+        if self.mode == "normal":
+            rating_color = DANGER_COLOR if self.rating < RATING_BLOCK_NEW_STATION else TEXT_COLOR
+            rating_label = f"    好评: {int(self.rating)}"
+            if self.rating < RATING_BLOCK_NEW_STATION:
+                rating_label += " (新站已暂停)"
+            row2_w = self.font.size(row2)[0]
+            self.screen.blit(self.font.render(rating_label, True, rating_color),
+                             (16 + row2_w, mid_y + 5))
+        # ---- 右侧: 提示, 单行放在第二行右侧, 避免与第一行重叠 ----
+        hint = ("左键空地建站 · 站间拖线连线 · 端点延伸 · 右键长按拖动站 · "
+                "T 切站台 · 空格暂停 · +/− 调速 · R 重开 · H 首页")
         s = self.font.render(hint, True, (130, 130, 135))
-        self.screen.blit(s, (SCREEN_W - s.get_width() - 16, 22))
+        self.screen.blit(s, (SCREEN_W - s.get_width() - 16, mid_y + 5))
         # 左下角: 署名
         powered_surf = self.font.render("Powered by 江星野", True, (130, 130, 135))
         self.screen.blit(powered_surf, (16, SCREEN_H - powered_surf.get_height() - 10))
