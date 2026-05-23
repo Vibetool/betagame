@@ -142,7 +142,8 @@ SHOP_ITEMS = [
     ("boost_30_10", "速度 +30%  ·  10 分钟", 1, "boost", {"percent": 30, "duration": 600}),
     ("boost_50_10", "速度 +50%  ·  10 分钟", 2, "boost", {"percent": 50, "duration": 600}),
     ("boost_30_20", "速度 +30%  ·  20 分钟", 2, "boost", {"percent": 30, "duration": 1200}),
-    ("carriage_1",  "每车厢载客 +1  (永久)", 1, "carriage", {"bonus": 1}),
+    ("carriage_1",  "每车厢载客 +1  ·  10 分钟", 1, "carriage",
+        {"bonus": 1, "duration": 600}),
 ]
 
 # 车厢按载客数着色 (0/1/2/3)
@@ -255,8 +256,8 @@ class MetroGame:
         # 氪金商城状态
         self.coins = 0
         self._coin_pending_score = 0   # 已为多少送达发放过金币
-        self.carriage_capacity_bonus = 0   # 永久车厢载客加成
-        self.active_boosts: List[dict] = []  # [{'percent': 30, 'remaining': 600}, ...]
+        self.active_boosts: List[dict] = []          # 速度 boost
+        self.active_carriage_buffs: List[dict] = []  # 车厢载客 +N buff (限时)
         self.shop_open = False
         self._shop_item_rects: List[Tuple[pygame.Rect, str]] = []
         self._shop_close_rect: Optional[pygame.Rect] = None
@@ -595,6 +596,10 @@ class MetroGame:
             return 1.0
         return 1.0 + sum(b["percent"] / 100.0 for b in self.active_boosts)
 
+    def _carriage_bonus(self) -> int:
+        """当前活跃的车厢载客加成总和 (限时叠加)。"""
+        return sum(b["bonus"] for b in self.active_carriage_buffs)
+
     def _tick_coins(self):
         """根据 score 结算尚未发放的金币。"""
         while self.score - self._coin_pending_score >= COIN_PER_DELIVERIES:
@@ -617,8 +622,11 @@ class MetroGame:
                 })
                 self._shop_message = f"已激活: {name}"
             elif kind == "carriage":
-                self.carriage_capacity_bonus += params["bonus"]
-                self._shop_message = f"已永久生效: {name}"
+                self.active_carriage_buffs.append({
+                    "bonus": params["bonus"],
+                    "remaining": float(params["duration"]),
+                })
+                self._shop_message = f"已激活: {name}"
             self._shop_message_until = self.time + 2.0
             return True
         return False
@@ -634,11 +642,16 @@ class MetroGame:
         self.time += dt
         self.station_grant_timer += dt
         self.reward_timer += dt
-        # 推进 boost 倒计时 (不随游戏速度倍率, 用真实秒数)
+        # 推进 boost / 车厢 buff 倒计时 (用真实秒数, 不受游戏速度倍率影响)
         if self.active_boosts:
             for b in self.active_boosts:
                 b["remaining"] -= raw_dt
             self.active_boosts = [b for b in self.active_boosts if b["remaining"] > 0]
+        if self.active_carriage_buffs:
+            for b in self.active_carriage_buffs:
+                b["remaining"] -= raw_dt
+            self.active_carriage_buffs = [b for b in self.active_carriage_buffs
+                                           if b["remaining"] > 0]
 
         # 周期发放可建车站预算 (手动放置, 不再自动生成新站)
         if self.station_grant_timer >= NEW_STATION_INTERVAL:
@@ -741,7 +754,7 @@ class MetroGame:
         line_shapes = {self.stations[i].shape for i in line.stations}
         remaining = []
         for p in s.passengers:
-            if (len(tr.passengers) < tr.capacity(self.carriage_capacity_bonus)
+            if (len(tr.passengers) < tr.capacity(self._carriage_bonus())
                     and p in line_shapes and p != s.shape):
                 tr.passengers.append(p)
             else:
@@ -1109,12 +1122,14 @@ class MetroGame:
             f"可用车厢: {self.available_carriages}",
             f"金币: {self.coins}",
         ]
-        if self.carriage_capacity_bonus:
-            row2_parts.append(f"车厢+{self.carriage_capacity_bonus}人")
-        # active boosts 倒计时
+        # active speed boosts 倒计时
         for b in self.active_boosts:
             rem = max(0, int(b["remaining"]))
             row2_parts.append(f"+{b['percent']}% {rem//60:02d}:{rem%60:02d}")
+        # active carriage buffs 倒计时
+        for b in self.active_carriage_buffs:
+            rem = max(0, int(b["remaining"]))
+            row2_parts.append(f"车厢+{b['bonus']} {rem//60:02d}:{rem%60:02d}")
         row2 = "    ".join(row2_parts)
         self.screen.blit(self.font.render(row2, True, TEXT_COLOR), (16, mid_y + 5))
         # ---- 右上角: 商城按钮 ----
