@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Metro · 简洁地铁模拟</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #f5f4f0;
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB",
+                 "Heiti SC", "Noto Sans CJK SC", "WenQuanYi Micro Hei",
+                 Arial, sans-serif;
+    color: #28282d;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #stage {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas#game {
+    display: block;
+    background: #fff;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+    border-radius: 6px;
+    max-width: 100%;
+    max-height: 100%;
+    touch-action: none;
+  }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="game" width="1200" height="760"></canvas></div>
+<script>
+"use strict";
+
+// ===========================================================
+// 常量
+// ===========================================================
+const SCREEN_W = 1200;
+const SCREEN_H = 760;
+const HUD_H = 60;
+const FPS = 60;
+
+const BG = "#f5f4f0";
+const HUD_BG = "#ffffff";
+const TEXT = "#28282d";
+const DANGER = "#dc3c3c";
+const PASSENGER_OUTLINE = "#23232d";
+
+const LINE_COLORS = [
+  "#d81b1b","#205fbf","#f5ae1a","#2baa4c",
+  "#8a50a8","#1c1c1c","#e87123",
+];
+
+const SHAPES = ["circle","square","triangle","diamond","pentagon"];
+const SHAPE_WEIGHTS = [40,30,20,7,3];
+
+const STATION_HIT_R = 30;
+const PASSENGER_SIZE = 6;
+const TRAIN_LEN = 28;
+const TRAIN_W = 12;
+const TRAIN_SPEED = 170.0;
+const STATION_CAP = 10;
+
+const STATION_SQUARE = 36;
+const STATION_RADIUS = 4;
+const PLATFORM_FILL = "#ffffff";
+const PLATFORM_EDGE = "#2d2d37";
+
+const NEW_STATION_INTERVAL = 14.0;
+const REWARD_INTERVAL = 30.0;
+const INITIAL_LINES = 3;
+const INITIAL_CARRIAGES = 3;
+const INITIAL_STATION_BUDGET = 2;
+const TRAIN_CAP_BASE = 3;
+const CARRIAGE_CAP = 3;
+const HIGH_SPAWN = 6.0;
+const LOW_SPAWN = 10.0;
+
+const COIN_PER_DELIVERIES = 100;
+const SHOP_ITEMS = [
+  { id:"boost_30_10", name:"速度 +30%  ·  10 分钟", cost:1, kind:"boost", percent:30, duration:600 },
+  { id:"boost_50_10", name:"速度 +50%  ·  10 分钟", cost:2, kind:"boost", percent:50, duration:600 },
+  { id:"boost_30_20", name:"速度 +30%  ·  20 分钟", cost:2, kind:"boost", percent:30, duration:1200 },
+  { id:"carriage_1",  name:"每车厢载客 +1  ·  10 分钟", cost:1, kind:"carriage", bonus:1, duration:600 },
+];
+
+// 车厢按 0/1/2/3 人着色
+const CAR_COLORS = ["#609cef","#5ab464","#e8c038","#dc3c3c"];
+
+// ===========================================================
+// 工具
+// ===========================================================
+function randRange(a,b){ return a + Math.random()*(b-a); }
+function randInt(a,b){ return Math.floor(randRange(a,b)); }
+function dist2(ax,ay,bx,by){ return (ax-bx)*(ax-bx)+(ay-by)*(ay-by); }
+function weightedChoice(items, weights){
+  const total = weights.reduce((a,b)=>a+b,0);
+  let r = Math.random()*total;
+  for (let i=0;i<items.length;i++){
+    r -= weights[i];
+    if (r<=0) return items[i];
+  }
+  return items[items.length-1];
+}
+function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi,v)); }
+
+// 形状绘制 (中心 x,y, 半径/半边 r)
+function drawShape(ctx, shape, x, y, r, fill, stroke, lw){
+  ctx.beginPath();
+  if (shape === "circle"){
+    ctx.arc(x,y,r,0,Math.PI*2);
+  } else if (shape === "square"){
+    ctx.rect(x-r, y-r, 2*r, 2*r);
+  } else if (shape === "triangle"){
+    ctx.moveTo(x, y-r-1);
+    ctx.lineTo(x-r, y+r*0.7);
+    ctx.lineTo(x+r, y+r*0.7);
+    ctx.closePath();
+  } else if (shape === "diamond"){
+    ctx.moveTo(x, y-r);
+    ctx.lineTo(x+r, y);
+    ctx.lineTo(x, y+r);
+    ctx.lineTo(x-r, y);
+    ctx.closePath();
+  } else if (shape === "pentagon"){
+    for (let k=0;k<5;k++){
+      const a = -Math.PI/2 + k*2*Math.PI/5;
+      const px = x + Math.cos(a)*r, py = y + Math.sin(a)*r;
+      if (k===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+  }
+  if (fill){ ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = lw||1; ctx.stroke(); }
+}
+
+// 旋转矩形
+function drawRotRect(ctx, cx, cy, w, h, angle, fill, stroke, lw){
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.beginPath();
+  ctx.rect(-w/2, -h/2, w, h);
+  if (fill){ ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke){ ctx.strokeStyle = stroke; ctx.lineWidth = lw||1; ctx.stroke(); }
+  ctx.restore();
+}
+
+// 圆角矩形 (兼容老浏览器)
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y,   x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x,   y+h, r);
+  ctx.arcTo(x,   y+h, x,   y,   r);
+  ctx.arcTo(x,   y,   x+w, y,   r);
+  ctx.closePath();
+}
+
+// ===========================================================
+// 数据
+// ===========================================================
+function newStation(x,y,shape, opts){
+  opts = opts || {};
+  return {
+    x, y, shape,
+    passengers: [],
+    spawnTimer: 0,
+    spawnInterval: opts.interval || 8.0,
+    zoneKind: opts.zoneKind || "normal",
+  };
+}
+function newTrain(lineIdx){
+  return {
+    lineIdx, segIdx:0, t:0, direction:1,
+    passengers:[], carriages:0,
+  };
+}
+function trainCapacity(tr, bonus){
+  return TRAIN_CAP_BASE + tr.carriages * (CARRIAGE_CAP + (bonus||0));
+}
+function newLine(color){
+  return { color, stations:[], trains:[] };
+}
+function newZone(x,y,kind){
+  return { x, y, kind };
+}
+
+// ===========================================================
+// 游戏主体
+// ===========================================================
+const STORAGE_KEY = "metro_persist_v1";
+
+class MetroGame {
+  constructor(canvas){
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    // 状态
+    this.state = "home";
+    this.mode = "classic";
+    // 持久 (跨局/跨模式)
+    const saved = this._loadPersist();
+    this.coins = saved.coins;
+    this.totalDeliveries = saved.totalDeliveries;
+    this._coinCredited = saved.coinCredited;
+    this.activeBoosts = [];          // {percent, remaining}
+    this.activeCarriageBuffs = [];   // {bonus, remaining}
+    // 商城
+    this.shopOpen = false;
+    this._shopButtonRect = null;
+    this._shopCloseRect = null;
+    this._shopItemRects = []; // [{rect, id}]
+    this._shopMessage = "";
+    this._shopMsgUntil = 0;
+    // 主页悬停状态
+    this._homeBirdRects = []; // [{rect, mode}]
+    this._homeHover = null;
+    this._homeShopBtnRect = null;
+    // 拖拽
+    this.drag = null;       // {fromStation, lineIdx|null, side:1|-1, mouse:[x,y]}
+    this.rightDrag = null;  // {station, origin:[x,y], moved}
+    // 时间
+    this.time = 0;          // 游戏分钟 (1 game min = 1 real sec)
+    this.realTime = 0;      // 真实秒数
+    this.speedScale = 1.0;
+    this.paused = false;
+    this.gameOver = false;
+    this.score = 0;
+    this.stationGrantTimer = 0;
+    this.rewardTimer = 0;
+    this.rewardAlt = 0;
+    this._lastTitleKey = null;
+
+    this.stations = [];
+    this.lines = [];
+    this.zones = [];
+    this.availableLines = INITIAL_LINES;
+    this.availableCarriages = INITIAL_CARRIAGES;
+    this.availableStations = INITIAL_STATION_BUDGET;
+
+    this._bindEvents();
+  }
+
+  // ----- 持久化 -----
+  _loadPersist(){
+    try {
+      const s = localStorage.getItem(STORAGE_KEY);
+      if (!s) return { coins:0, totalDeliveries:0, coinCredited:0 };
+      const o = JSON.parse(s);
+      return {
+        coins: o.coins|0,
+        totalDeliveries: o.totalDeliveries|0,
+        coinCredited: o.coinCredited|0,
+      };
+    } catch (e){
+      return { coins:0, totalDeliveries:0, coinCredited:0 };
+    }
+  }
+  _savePersist(){
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        coins: this.coins,
+        totalDeliveries: this.totalDeliveries,
+        coinCredited: this._coinCredited,
+      }));
+    } catch (e){}
+  }
+
+  // ----- 重置当前一局 (不动持久数据 & 活跃 buff) -----
+  reset(){
+    this.stations = [];
+    this.lines = [];
+    this.zones = [];
+    this.availableLines = INITIAL_LINES;
+    this.availableCarriages = INITIAL_CARRIAGES;
+    this.availableStations = INITIAL_STATION_BUDGET;
+    this.time = 0;
+    this.stationGrantTimer = 0;
+    this.rewardTimer = 0;
+    this.rewardAlt = 0;
+    this.score = 0;
+    this.paused = false;
+    this.gameOver = false;
+    this.speedScale = 1.0;
+    this.drag = null;
+    this.rightDrag = null;
+
+    this._generateZones();
+    // 每个区中心一个起始站
+    const used = new Set();
+    for (const z of this.zones){
+      let choices = SHAPES.slice(0,3).filter(s=>!used.has(s));
+      if (choices.length===0) choices = SHAPES.slice(0,3);
+      const shape = choices[Math.floor(Math.random()*choices.length)];
+      used.add(shape);
+      const interval = z.kind === "high" ? HIGH_SPAWN : LOW_SPAWN;
+      this.stations.push(newStation(z.x, z.y, shape, {interval, zoneKind: z.kind}));
+    }
+  }
+
+  _generateZones(){
+    this.zones = [];
+    const kinds = ["high","high","low"];
+    const margin_x = 220, margin_top = HUD_H + 180, margin_bottom = 180;
+    for (const kind of kinds){
+      for (let tries=0; tries<400; tries++){
+        const x = randRange(margin_x, SCREEN_W - margin_x);
+        const y = randRange(margin_top, SCREEN_H - margin_bottom);
+        let ok = true;
+        for (const z of this.zones){
+          if (dist2(z.x,z.y,x,y) < 260*260){ ok=false; break; }
+        }
+        if (ok){ this.zones.push(newZone(x,y,kind)); break; }
+      }
+    }
+  }
+
+  // 站台生成间隔: 离哪个区中心近就用哪个区的强度, 中间区域加权混合
+  _spawnIntervalFor(x,y){
+    if (this.zones.length===0) return [8.0, "normal"];
+    let weights = [], rates = [];
+    for (const z of this.zones){
+      const d = Math.sqrt(dist2(z.x,z.y,x,y)) + 1;
+      weights.push(1/(d*d));
+      rates.push(z.kind==="high" ? HIGH_SPAWN : LOW_SPAWN);
+    }
+    const total = weights.reduce((a,b)=>a+b,0);
+    let v = 0;
+    for (let i=0;i<rates.length;i++) v += rates[i]*weights[i];
+    v /= total;
+    // 距离最近的区决定 zoneKind 字段
+    let nearestIdx = 0, nearestD = Infinity;
+    for (let i=0;i<this.zones.length;i++){
+      const d = dist2(this.zones[i].x, this.zones[i].y, x, y);
+      if (d < nearestD){ nearestD = d; nearestIdx = i; }
+    }
+    return [v, this.zones[nearestIdx].kind];
+  }
+
+  _canPlaceStationAt(x,y){
+    if (x < 50 || x > SCREEN_W-50) return false;
+    if (y < HUD_H+50 || y > SCREEN_H-50) return false;
+    for (const s of this.stations){
+      if (dist2(s.x,s.y,x,y) < (STATION_SQUARE*1.6)**2) return false;
+    }
+    return true;
+  }
+
+  _placeStation(x,y){
+    if (this.availableStations <= 0) return false;
+    if (!this._canPlaceStationAt(x,y)) return false;
+    const [interval, kind] = this._spawnIntervalFor(x,y);
+    const shape = weightedChoice(SHAPES, SHAPE_WEIGHTS);
+    this.stations.push(newStation(x,y,shape,{interval,zoneKind:kind}));
+    this.availableStations -= 1;
+    return true;
+  }
+
+  _stationAt(mx,my){
+    for (let i=0;i<this.stations.length;i++){
+      const s = this.stations[i];
+      if (dist2(s.x,s.y,mx,my) <= STATION_HIT_R*STATION_HIT_R) return i;
+    }
+    return -1;
+  }
+
+  // ----- 商城 -----
+  _speedMultiplier(){
+    if (this.activeBoosts.length===0) return 1.0;
+    let s = 1.0;
+    for (const b of this.activeBoosts) s += b.percent/100.0;
+    return s;
+  }
+  _carriageBonus(){
+    let s = 0;
+    for (const b of this.activeCarriageBuffs) s += b.bonus;
+    return s;
+  }
+  _tickCoins(){
+    while (this.totalDeliveries - this._coinCredited >= COIN_PER_DELIVERIES){
+      this._coinCredited += COIN_PER_DELIVERIES;
+      this.coins += 1;
+    }
+    this._savePersist();
+  }
+  _buyShopItem(id){
+    const item = SHOP_ITEMS.find(x=>x.id===id);
+    if (!item) return false;
+    if (this.coins < item.cost){
+      this._shopMessage = `金币不足 (需要 ${item.cost})`;
+      this._shopMsgUntil = this.realTime + 2.0;
+      return false;
+    }
+    this.coins -= item.cost;
+    if (item.kind === "boost"){
+      this.activeBoosts.push({percent:item.percent, remaining:item.duration});
+      this._shopMessage = `已激活: ${item.name}`;
+    } else if (item.kind === "carriage"){
+      this.activeCarriageBuffs.push({bonus:item.bonus, remaining:item.duration});
+      this._shopMessage = `已激活: ${item.name}`;
+    }
+    this._shopMsgUntil = this.realTime + 2.0;
+    this._savePersist();
+    return true;
+  }
+
+  // ----- 时段客流系数 -----
+  _passengerRateMultiplier(){
+    const totalMin = Math.floor(this.time);
+    const hour = Math.floor(totalMin/60) % 24;
+    let m = 1.0;
+    if (hour >= 21 || hour < 6) m *= 0.7;
+    if (this.mode === "normal" && hour === 12) m *= 0.8;
+    return m;
+  }
+
+  // ===========================================================
+  // 更新
+  // ===========================================================
+  update(dt){
+    // 真实秒数 / boost 倒计时 (即使在 home 也应该更新? 不, 与桌面一致, 只在 play 时推进)
+    if (this.state !== "play") return;
+    if (this.paused || this.gameOver) return;
+    const rawDt = dt;
+    this.realTime += rawDt;
+    dt *= this.speedScale;
+    this.time += dt;
+    this.stationGrantTimer += dt;
+    this.rewardTimer += dt;
+
+    // boost 倒计时 (用真实秒)
+    if (this.activeBoosts.length){
+      for (const b of this.activeBoosts) b.remaining -= rawDt;
+      this.activeBoosts = this.activeBoosts.filter(b=>b.remaining>0);
+    }
+    if (this.activeCarriageBuffs.length){
+      for (const b of this.activeCarriageBuffs) b.remaining -= rawDt;
+      this.activeCarriageBuffs = this.activeCarriageBuffs.filter(b=>b.remaining>0);
+    }
+
+    // 周期发放可建站
+    if (this.stationGrantTimer >= NEW_STATION_INTERVAL){
+      this.stationGrantTimer = 0;
+      this.availableStations += 1;
+    }
+    // 奖励轮换发放
+    if (this.rewardTimer >= REWARD_INTERVAL){
+      this.rewardTimer = 0;
+      if (this.rewardAlt === 0) this.availableCarriages += 1;
+      else this.availableLines += 1;
+      this.rewardAlt = 1 - this.rewardAlt;
+    }
+
+    // 乘客生成 (按时段系数)
+    const rateMult = this._passengerRateMultiplier();
+    const effDt = dt * rateMult;
+    for (const s of this.stations){
+      s.spawnTimer += effDt;
+      if (s.spawnTimer >= s.spawnInterval){
+        s.spawnTimer = 0;
+        const others = SHAPES.filter(sh=>sh!==s.shape);
+        const w = others.map(sh => SHAPE_WEIGHTS[SHAPES.indexOf(sh)]);
+        s.passengers.push(weightedChoice(others, w));
+      }
+    }
+
+    // 列车
+    const sm = this._speedMultiplier();
+    for (let li=0; li<this.lines.length; li++){
+      const line = this.lines[li];
+      if (line.stations.length < 2) continue;
+      const nSegs = line.stations.length - 1;
+      this._assignCarriagesAuto(line);
+      for (const tr of line.trains){
+        let segLen = this._segLength(line, tr.segIdx); if (segLen < 1e-3) segLen = 1;
+        tr.t += (TRAIN_SPEED * sm / segLen) * dt * tr.direction;
+        // overflow loop
+        let safe = 0;
+        while ((tr.t >= 1 || tr.t <= 0) && safe++ < 8){
+          if (tr.t >= 1){
+            const arrived = line.stations[tr.segIdx+1];
+            this._trainVisit(tr, line, arrived);
+            const leftover = tr.t - 1;
+            if (tr.segIdx + 1 < nSegs){
+              tr.segIdx += 1;
+              tr.t = leftover;
+            } else {
+              tr.direction = -1;
+              tr.t = 1 - leftover;
+            }
+          } else {
+            const arrived = line.stations[tr.segIdx];
+            this._trainVisit(tr, line, arrived);
+            const overflow = -tr.t;
+            if (tr.segIdx > 0){
+              tr.segIdx -= 1;
+              tr.t = 1 - overflow;
+            } else {
+              tr.direction = 1;
+              tr.t = overflow;
+            }
+          }
+          segLen = this._segLength(line, tr.segIdx); if (segLen < 1e-3) segLen = 1;
+        }
+      }
+    }
+  }
+
+  _segLength(line, idx){
+    const a = this.stations[line.stations[idx]];
+    const b = this.stations[line.stations[idx+1]];
+    return Math.hypot(b.x-a.x, b.y-a.y);
+  }
+
+  _assignCarriagesAuto(line){
+    if (!line.trains.length) return;
+    while (this.availableCarriages > 0){
+      let target = line.trains[0];
+      for (const t of line.trains) if (t.carriages < target.carriages) target = t;
+      if (target.carriages >= 2) break;
+      const total = line.trains.reduce((a,t)=>a+t.carriages,0);
+      if (total >= line.trains.length * 2) break;
+      if (Math.random() < 0.005){
+        target.carriages += 1;
+        this.availableCarriages -= 1;
+      } else break;
+    }
+  }
+
+  _trainVisit(tr, line, stationIdx){
+    const s = this.stations[stationIdx];
+    // 下客
+    const newPas = [];
+    for (const p of tr.passengers){
+      if (p === s.shape){
+        this.score += 1;
+        this.totalDeliveries += 1;
+      } else newPas.push(p);
+    }
+    tr.passengers = newPas;
+    this._tickCoins();
+    // 上客 (line.stations 上的形状能到的优先)
+    const lineShapes = new Set(line.stations.map(i=>this.stations[i].shape));
+    const remaining = [];
+    const cap = trainCapacity(tr, this._carriageBonus());
+    for (const p of s.passengers){
+      if (tr.passengers.length < cap && lineShapes.has(p) && p !== s.shape){
+        tr.passengers.push(p);
+      } else remaining.push(p);
+    }
+    s.passengers = remaining;
+  }
+
+  // ===========================================================
+  // 输入
+  // ===========================================================
+  _bindEvents(){
+    const cv = this.canvas;
+    // 把 client 坐标转为 canvas 坐标 (考虑 CSS scaling)
+    const toCanvas = (clientX, clientY) => {
+      const r = cv.getBoundingClientRect();
+      const sx = cv.width / r.width, sy = cv.height / r.height;
+      return [ (clientX - r.left) * sx, (clientY - r.top) * sy ];
+    };
+    cv.addEventListener("contextmenu", e=>e.preventDefault());
+    cv.addEventListener("mousedown", e=>{
+      const [x,y] = toCanvas(e.clientX, e.clientY);
+      this._onMouseDown(e.button, x, y);
+    });
+    cv.addEventListener("mouseup", e=>{
+      const [x,y] = toCanvas(e.clientX, e.clientY);
+      this._onMouseUp(e.button, x, y);
+    });
+    cv.addEventListener("mousemove", e=>{
+      const [x,y] = toCanvas(e.clientX, e.clientY);
+      this._onMouseMove(x, y);
+    });
+    // 触摸支持: 单指 -> 左键
+    cv.addEventListener("touchstart", e=>{
+      if (!e.touches[0]) return;
+      e.preventDefault();
+      const [x,y] = toCanvas(e.touches[0].clientX, e.touches[0].clientY);
+      this._onMouseDown(0, x, y);
+    }, {passive:false});
+    cv.addEventListener("touchmove", e=>{
+      if (!e.touches[0]) return;
+      e.preventDefault();
+      const [x,y] = toCanvas(e.touches[0].clientX, e.touches[0].clientY);
+      this._onMouseMove(x,y);
+    }, {passive:false});
+    cv.addEventListener("touchend", e=>{
+      e.preventDefault();
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const [x,y] = toCanvas(t.clientX, t.clientY);
+      this._onMouseUp(0, x, y);
+    }, {passive:false});
+
+    window.addEventListener("keydown", e=>this._onKey(e));
+  }
+
+  _onKey(e){
+    const k = e.key;
+    if (k === "Escape"){
+      if (this.shopOpen){ this.shopOpen=false; return; }
+      if (this.state === "play"){ this.state = "home"; return; }
+      return;
+    }
+    if (this.state !== "play") return;
+    if (k === " " || k === "Spacebar"){ this.paused = !this.paused; e.preventDefault(); }
+    else if (k.toLowerCase() === "r") this.reset();
+    else if (k === "+" || k === "=") this.speedScale = Math.min(4, this.speedScale + 0.25);
+    else if (k === "-" || k === "_") this.speedScale = Math.max(0.25, this.speedScale - 0.25);
+    else if (k.toLowerCase() === "h") this.state = "home";
+  }
+
+  _onMouseDown(button, x, y){
+    // 商城打开时, 所有点击优先给商城
+    if (this.shopOpen){
+      if (button !== 0) return;
+      if (this._shopCloseRect && pointInRect(x,y,this._shopCloseRect)){
+        this.shopOpen = false; return;
+      }
+      for (const it of this._shopItemRects){
+        if (pointInRect(x,y,it.rect)){
+          this._buyShopItem(it.id);
+          return;
+        }
+      }
+      // 点击模态外的暗化区域 -> 关闭
+      return;
+    }
+    if (this.state === "home"){
+      if (button !== 0) return;
+      if (this._homeShopBtnRect && pointInRect(x,y,this._homeShopBtnRect)){
+        this.shopOpen = true; return;
+      }
+      for (const it of this._homeBirdRects){
+        if (pointInRect(x,y,it.rect)){
+          this.mode = it.mode;
+          this.reset();
+          this.state = "play";
+          return;
+        }
+      }
+      return;
+    }
+    // play
+    if (this.gameOver) return;
+    if (button === 0){
+      this._onLeftDown(x,y);
+    } else if (button === 2){
+      this._onRightDown(x,y);
+    }
+  }
+
+  _onMouseMove(x, y){
+    if (this.shopOpen) return;
+    if (this.state === "home"){
+      this._homeHover = null;
+      for (const it of this._homeBirdRects){
+        if (pointInRect(x,y,it.rect)){ this._homeHover = it.mode; break; }
+      }
+      return;
+    }
+    // play
+    if (this.drag) this.drag.mouse = [x,y];
+    if (this.rightDrag){
+      const o = this.rightDrag.origin;
+      const dx = x - o[0], dy = y - o[1];
+      if (!this.rightDrag.moved){
+        if (dx*dx + dy*dy < 5*5) return;
+        this.rightDrag.moved = true;
+      }
+      const s = this.stations[this.rightDrag.station];
+      const m = 20;
+      s.x = clamp(x, m, SCREEN_W - m);
+      s.y = clamp(y, HUD_H + m, SCREEN_H - m);
+    }
+  }
+
+  _onMouseUp(button, x, y){
+    if (this.shopOpen) return;
+    if (this.state !== "play") return;
+    if (this.gameOver) return;
+    if (button === 0) this._onLeftUp(x,y);
+    else if (button === 2) this._onRightUp(x,y);
+  }
+
+  _onLeftDown(x,y){
+    const si = this._stationAt(x,y);
+    if (si < 0){
+      this._placeStation(x,y);
+      return;
+    }
+    // 端点 -> 延伸
+    for (let li=0; li<this.lines.length; li++){
+      const line = this.lines[li];
+      if (!line.stations.length) continue;
+      if (line.stations[0] === si){
+        this.drag = { fromStation: si, lineIdx: li, side: -1, mouse:[x,y] };
+        return;
+      }
+      if (line.stations[line.stations.length-1] === si){
+        this.drag = { fromStation: si, lineIdx: li, side: 1, mouse:[x,y] };
+        return;
+      }
+    }
+    if (this.availableLines > 0){
+      this.drag = { fromStation: si, lineIdx: null, side: 1, mouse:[x,y] };
+    }
+  }
+
+  _onLeftUp(x,y){
+    if (!this.drag) return;
+    const target = this._stationAt(x,y);
+    const from = this.drag.fromStation;
+    if (target < 0 || target === from){
+      this.drag = null; return;
+    }
+    const d = this.drag;
+    if (d.lineIdx !== null){
+      const line = this.lines[d.lineIdx];
+      if (line.stations.includes(target)){
+        if (d.side === 1 && target === line.stations[0] && line.stations.length >= 3){
+          line.stations.push(target);
+        } else if (d.side === -1 && target === line.stations[line.stations.length-1] && line.stations.length >= 3){
+          line.stations.unshift(target);
+        }
+      } else {
+        if (d.side === 1) line.stations.push(target);
+        else line.stations.unshift(target);
+      }
+    } else {
+      if (this.availableLines > 0){
+        const color = LINE_COLORS[this.lines.length % LINE_COLORS.length];
+        const ln = newLine(color);
+        ln.stations = [from, target];
+        ln.trains = [newTrain(this.lines.length)];
+        this.lines.push(ln);
+        this.availableLines -= 1;
+      }
+    }
+    this.drag = null;
+  }
+
+  _onRightDown(x,y){
+    const si = this._stationAt(x,y);
+    if (si < 0){ this.rightDrag = null; return; }
+    this.rightDrag = { station: si, origin: [x,y], moved: false };
+  }
+  _onRightUp(x,y){
+    if (!this.rightDrag) return;
+    if (this.rightDrag.moved){
+      this.rightDrag = null; return;
+    }
+    // 短点击 -> 删除经过该站的所有线路
+    const si = this.rightDrag.station;
+    this.rightDrag = null;
+    const remain = [];
+    for (const line of this.lines){
+      if (line.stations.includes(si)){
+        this.availableLines += 1;
+        continue;
+      }
+      remain.push(line);
+    }
+    this.lines = remain;
+  }
+
+  // ===========================================================
+  // 绘制
+  // ===========================================================
+  draw(){
+    const ctx = this.ctx;
+    if (this.state === "home"){
+      this._drawHome();
+    } else {
+      ctx.fillStyle = BG;
+      ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
+      this._drawLines();
+      this._drawDragPreview();
+      this._drawTrains();
+      this._drawStations();
+      this._drawHud();
+      if (this.paused && !this.gameOver) this._drawCenterText("已暂停 (空格继续)", "#3c3c3c");
+      if (this.gameOver) this._drawCenterText(`游戏结束  送达乘客: ${this.score}  按 R 重开`, DANGER);
+    }
+    if (this.shopOpen) this._drawShop();
+    this._updateDocTitle();
+  }
+
+  _drawLines(){
+    const ctx = this.ctx;
+    ctx.lineWidth = 7; ctx.lineJoin="round"; ctx.lineCap="round";
+    for (const line of this.lines){
+      if (line.stations.length < 2) continue;
+      ctx.strokeStyle = line.color;
+      ctx.beginPath();
+      for (let i=0;i<line.stations.length;i++){
+        const s = this.stations[line.stations[i]];
+        if (i===0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y);
+      }
+      ctx.stroke();
+    }
+  }
+
+  _drawDragPreview(){
+    if (!this.drag) return;
+    const ctx = this.ctx;
+    const s = this.stations[this.drag.fromStation];
+    let color = "#b4b4b4";
+    if (this.drag.lineIdx !== null) color = this.lines[this.drag.lineIdx].color;
+    else if (this.availableLines > 0) color = LINE_COLORS[this.lines.length % LINE_COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(this.drag.mouse[0], this.drag.mouse[1]);
+    ctx.stroke();
+  }
+
+  _drawTrains(){
+    const ctx = this.ctx;
+    for (const line of this.lines){
+      if (line.stations.length < 2) continue;
+      for (const tr of line.trains){
+        const a = this.stations[line.stations[tr.segIdx]];
+        const b = this.stations[line.stations[tr.segIdx+1]];
+        const x = a.x + (b.x-a.x)*tr.t;
+        const y = a.y + (b.y-a.y)*tr.t;
+        const angle = Math.atan2(b.y-a.y, b.x-a.x);
+        this._drawTrainShape(x,y,angle,line.color,tr);
+      }
+    }
+  }
+
+  _drawTrainShape(x,y,angle,color,tr){
+    const ctx = this.ctx;
+    const bodies = 1 + tr.carriages;
+    const gap = 4;
+    const totalLen = bodies*TRAIN_LEN + (bodies-1)*gap;
+    const start = -totalLen/2 + TRAIN_LEN/2;
+    // 每节按当前载客数从 0..3 区段着色
+    const cap = trainCapacity(tr, this._carriageBonus());
+    const segCap = Math.max(1, Math.floor(cap / bodies));
+    for (let i=0;i<bodies;i++){
+      const cx = x + Math.cos(angle)*(start + i*(TRAIN_LEN+gap));
+      const cy = y + Math.sin(angle)*(start + i*(TRAIN_LEN+gap));
+      // 这节车里的人 (取顺序里的 segCap 段)
+      const inThis = clamp(tr.passengers.length - i*segCap, 0, segCap);
+      const ci = clamp(Math.floor((inThis / segCap) * 3 + 0.0001), 0, 3);
+      drawRotRect(ctx, cx, cy, TRAIN_LEN, TRAIN_W, angle, CAR_COLORS[ci], "#23232d", 2);
+    }
+    // 头车上写总载客
+    if (tr.passengers.length > 0){
+      const headCx = x + Math.cos(angle)*(start + (bodies-1)*(TRAIN_LEN+gap));
+      const headCy = y + Math.sin(angle)*(start + (bodies-1)*(TRAIN_LEN+gap));
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 14px " + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(String(tr.passengers.length), headCx, headCy);
+    }
+  }
+
+  _drawStations(){
+    const ctx = this.ctx;
+    for (const s of this.stations){
+      const half = STATION_SQUARE/2;
+      roundRect(ctx, s.x-half, s.y-half, STATION_SQUARE, STATION_SQUARE, STATION_RADIUS);
+      ctx.fillStyle = PLATFORM_FILL; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = PLATFORM_EDGE; ctx.stroke();
+      // 乘客网格
+      this._drawPassengers(s);
+      // 数字
+      this._drawCountLabel(s);
+    }
+  }
+
+  _drawPassengers(s){
+    if (!s.passengers.length) return;
+    const ctx = this.ctx;
+    const cols = 5;
+    const spacing = PASSENGER_SIZE*2 + 2;
+    const sx = s.x + STATION_SQUARE/2 + 6 + PASSENGER_SIZE;
+    const sy = s.y - STATION_SQUARE/2 + PASSENGER_SIZE;
+    for (let k=0;k<s.passengers.length;k++){
+      const col = k % cols, row = Math.floor(k/cols);
+      const px = sx + col*spacing;
+      const py = sy + row*spacing;
+      drawShape(ctx, s.passengers[k], px, py, PASSENGER_SIZE, "#3c3c41", PASSENGER_OUTLINE, 1);
+    }
+  }
+
+  _drawCountLabel(s){
+    const ctx = this.ctx;
+    const n = s.passengers.length;
+    const full = n > STATION_CAP;
+    const fontSize = full ? 28 : 16;
+    const color = full ? DANGER : TEXT;
+    ctx.font = (full ? "bold " : "") + fontSize + "px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const yOff = -(STATION_SQUARE/2 + 14);
+    const txt = String(n);
+    const w = ctx.measureText(txt).width;
+    // 白底
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(s.x - w/2 - 4, s.y + yOff - fontSize/2 - 2, w + 8, fontSize + 4);
+    ctx.fillStyle = color;
+    ctx.fillText(txt, s.x, s.y + yOff);
+  }
+
+  _drawHud(){
+    const ctx = this.ctx;
+    ctx.fillStyle = HUD_BG;
+    ctx.fillRect(0,0,SCREEN_W,HUD_H);
+    ctx.strokeStyle = "#dcdcdc"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0,HUD_H); ctx.lineTo(SCREEN_W,HUD_H); ctx.stroke();
+    ctx.strokeStyle = "#ebebee";
+    ctx.beginPath(); ctx.moveTo(16,HUD_H/2); ctx.lineTo(SCREEN_W-16,HUD_H/2); ctx.stroke();
+
+    const sm = this._speedMultiplier();
+    let modeLabel = (this.mode==="classic") ? "经典" : "正常";
+    const rm = this._passengerRateMultiplier();
+    if (rm < 0.999) modeLabel += ` (客流 x${rm.toFixed(2)})`;
+
+    const row1Parts = [
+      `模式: ${modeLabel}`,
+      `送达: ${this.score}`,
+      `车站: ${this.stations.length}`,
+      `可建站: ${this.availableStations}`,
+      `速度: x${this.speedScale.toFixed(2)}`,
+    ];
+    if (sm > 1.0) row1Parts.push(`地铁倍速: x${sm.toFixed(2)}`);
+    ctx.fillStyle = TEXT;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.font = "16px " + getComputedStyle(document.body).fontFamily;
+    ctx.fillText(row1Parts.join("    "), 16, 22);
+
+    const row2Parts = [
+      `可用线路: ${this.availableLines}`,
+      `可用车厢: ${this.availableCarriages}`,
+      `金币: ${this.coins}`,
+    ];
+    for (const b of this.activeBoosts){
+      const rem = Math.max(0, Math.floor(b.remaining));
+      row2Parts.push(`+${b.percent}% ${String(Math.floor(rem/60)).padStart(2,"0")}:${String(rem%60).padStart(2,"0")}`);
+    }
+    for (const b of this.activeCarriageBuffs){
+      const rem = Math.max(0, Math.floor(b.remaining));
+      row2Parts.push(`车厢+${b.bonus} ${String(Math.floor(rem/60)).padStart(2,"0")}:${String(rem%60).padStart(2,"0")}`);
+    }
+    ctx.fillText(row2Parts.join("    "), 16, 50);
+
+    // 底部提示 + 署名
+    ctx.fillStyle = "#82828a";
+    ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
+    const hint = "左键空地建站 · 拖线连线 · 端点延伸 · 右键长按拖动站 · 空格暂停 · +/− 调速 · R 重开 · H 首页";
+    const tw = ctx.measureText(hint).width;
+    ctx.fillText(hint, SCREEN_W - tw - 16, SCREEN_H - 14);
+    ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
+  }
+
+  _drawCenterText(text, color){
+    const ctx = this.ctx;
+    ctx.font = "bold 32px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const w = ctx.measureText(text).width;
+    const x = SCREEN_W/2, y = SCREEN_H/2;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(x - w/2 - 20, y - 28, w+40, 56);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+
+  // ===========================================================
+  // 主页
+  // ===========================================================
+  _drawHome(){
+    const ctx = this.ctx;
+    ctx.fillStyle = "#faf8f0";
+    ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
+    this._drawHomeRails();
+
+    // 顶部左: 累计 / 金币
+    ctx.fillStyle = "#3c3c46";
+    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillText(`累计送达: ${this.totalDeliveries}    金币: ${this.coins}`, 30, 48);
+
+    // 顶部右: 商城按钮
+    const btnLbl = `氪金商城  (${this.coins})`;
+    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
+    const bw = ctx.measureText(btnLbl).width + 28;
+    const bh = 36;
+    const bx = SCREEN_W - bw - 30, by = 24;
+    const btnRect = {x:bx, y:by, w:bw, h:bh};
+    roundRect(ctx, bx, by, bw, bh, 10);
+    ctx.fillStyle = "#d81b1b"; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#8c1212"; ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(btnLbl, bx + bw/2, by + bh/2);
+    this._homeShopBtnRect = btnRect;
+
+    // 大标题
+    ctx.fillStyle = "#23232d";
+    ctx.font = "bold 64px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("Mini Metro", SCREEN_W/2, 150);
+    // 红色装饰短线
+    ctx.fillStyle = "#d81b1b";
+    roundRect(ctx, SCREEN_W/2 - 60, 192, 120, 5, 2);
+    ctx.fill();
+    ctx.fillStyle = "#6e6e78";
+    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
+    ctx.fillText("简洁地铁模拟  ·  选择模式", SCREEN_W/2, 232);
+
+    // 两只鸟
+    this._homeBirdRects = [];
+    const birdY = SCREEN_H/2 + 60;
+    const slots = [
+      [SCREEN_W/3,      birdY, "#205fbf", "classic", "经典模式", "夜间 21:00-06:00 客流 -30%"],
+      [SCREEN_W*2/3,    birdY, "#d81b1b", "normal",  "正常模式", "夜间 -30%  ·  午间 12:00-13:00 客流 -20%"],
+    ];
+    for (const [cx,cy,color,mode,label,desc] of slots){
+      const hover = (this._homeHover === mode);
+      const rect = {x: cx-150, y: cy-90, w:300, h:220};
+      roundRect(ctx, rect.x, rect.y, rect.w, rect.h, 14);
+      ctx.fillStyle = "#fff"; ctx.fill();
+      ctx.lineWidth = hover ? 3 : 2;
+      ctx.strokeStyle = hover ? color : "#dcdce0"; ctx.stroke();
+      this._drawBird(cx, cy-10, color, hover ? 1.08 : 1.0);
+      ctx.fillStyle = hover ? color : "#23232d";
+      ctx.font = "bold 28px " + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(label, cx, cy+70);
+      ctx.fillStyle = "#6e6e78";
+      ctx.font = "14px " + getComputedStyle(document.body).fontFamily;
+      ctx.fillText(desc, cx, cy+100);
+      this._homeBirdRects.push({rect, mode});
+    }
+
+    // 底部提示 + 署名
+    ctx.fillStyle = "#8c8c96";
+    ctx.font = "14px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign="center"; ctx.textBaseline = "alphabetic";
+    ctx.fillText("点击一只鸟开始  ·  游戏中按 H 返回首页  ·  ESC 退出", SCREEN_W/2, SCREEN_H - 50);
+    ctx.textAlign="left";
+    ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
+  }
+
+  _drawHomeRails(){
+    const ctx = this.ctx;
+    const rail = "#aaaab4";
+    const tie = "#9b8264";
+    for (let row=0; row<3; row++){
+      const cy = 290 + row*130;
+      ctx.fillStyle = tie;
+      for (let x=20; x<SCREEN_W-20; x+=28){
+        roundRect(ctx, x, cy-9, 18, 18, 2);
+        ctx.fill();
+      }
+      ctx.strokeStyle = rail; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(0,cy-11); ctx.lineTo(SCREEN_W, cy-11); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,cy+11); ctx.lineTo(SCREEN_W, cy+11); ctx.stroke();
+    }
+  }
+
+  _drawBird(cx, cy, color, scale){
+    const ctx = this.ctx;
+    const s = v => v * scale;
+    const outline = "#23232d";
+    // 身体
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, s(55), s(35), 0, 0, Math.PI*2);
+    ctx.fillStyle = color; ctx.fill();
+    ctx.strokeStyle = outline; ctx.lineWidth = 2; ctx.stroke();
+    // 尾巴 (左)
+    ctx.beginPath();
+    ctx.moveTo(cx - s(55), cy - s(5));
+    ctx.lineTo(cx - s(90), cy - s(20));
+    ctx.lineTo(cx - s(78), cy + s(8));
+    ctx.closePath();
+    ctx.fillStyle = color; ctx.fill();
+    ctx.stroke();
+    // 翅膀
+    const dark = "rgba(0,0,0,0.18)";
+    ctx.beginPath();
+    ctx.moveTo(cx - s(15), cy - s(5));
+    ctx.lineTo(cx + s(20), cy - s(10));
+    ctx.lineTo(cx + s(8), cy + s(18));
+    ctx.lineTo(cx - s(20), cy + s(12));
+    ctx.closePath();
+    ctx.fillStyle = color; ctx.fill();
+    ctx.fillStyle = dark; ctx.fill();
+    ctx.stroke();
+    // 头
+    const hx = cx + s(40), hy = cy - s(22);
+    ctx.beginPath();
+    ctx.arc(hx, hy, s(26), 0, Math.PI*2);
+    ctx.fillStyle = color; ctx.fill(); ctx.stroke();
+    // 喙
+    ctx.beginPath();
+    ctx.moveTo(hx + s(18), hy - s(2));
+    ctx.lineTo(hx + s(42), hy);
+    ctx.lineTo(hx + s(18), hy + s(8));
+    ctx.closePath();
+    ctx.fillStyle = "#f5ae1a"; ctx.fill(); ctx.stroke();
+    // 眼
+    ctx.beginPath();
+    ctx.arc(hx + s(6), hy - s(4), s(6), 0, Math.PI*2);
+    ctx.fillStyle = "#fff"; ctx.fill(); ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(hx + s(8), hy - s(4), s(3), 0, Math.PI*2);
+    ctx.fillStyle = outline; ctx.fill();
+    // 脚
+    ctx.lineWidth = 2;
+    for (const fdx of [-s(8), s(14)]){
+      ctx.beginPath();
+      ctx.moveTo(cx + fdx, cy + s(32));
+      ctx.lineTo(cx + fdx, cy + s(46));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx + fdx - s(4), cy + s(46));
+      ctx.lineTo(cx + fdx + s(5), cy + s(46));
+      ctx.stroke();
+    }
+  }
+
+  // ===========================================================
+  // 商城弹窗
+  // ===========================================================
+  _drawShop(){
+    const ctx = this.ctx;
+    ctx.fillStyle = "rgba(20,20,28,0.66)";
+    ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
+    const cw = 600, ch = 460;
+    const cx = (SCREEN_W - cw)/2, cy = (SCREEN_H - ch)/2;
+    roundRect(ctx, cx, cy, cw, ch, 14);
+    ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#2d2d37"; ctx.stroke();
+    // 标题
+    ctx.fillStyle = "#2d2d37";
+    ctx.font = "bold 32px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillText("氪金商城", cx + 24, cy + 50);
+    // 金币
+    ctx.fillStyle = "#d81b1b";
+    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
+    ctx.fillText(`金币: ${this.coins}    (每送达 100 次 +1 枚)`, cx + 24, cy + 92);
+    // 关闭
+    const closeR = {x: cx + cw - 44, y: cy + 14, w: 30, h: 30};
+    roundRect(ctx, closeR.x, closeR.y, closeR.w, closeR.h, 6);
+    ctx.fillStyle = "#f0f0f5"; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = "#8c8c96"; ctx.stroke();
+    ctx.fillStyle = "#3c3c46";
+    ctx.font = "18px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("✕", closeR.x + 15, closeR.y + 15);
+    this._shopCloseRect = closeR;
+    // 商品
+    this._shopItemRects = [];
+    let itemY = cy + 110;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    for (const item of SHOP_ITEMS){
+      const rowR = {x: cx + 20, y: itemY, w: cw - 40, h: 64};
+      const can = this.coins >= item.cost;
+      roundRect(ctx, rowR.x, rowR.y, rowR.w, rowR.h, 10);
+      ctx.fillStyle = can ? "#fafafc" : "#f4f4f6"; ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = can ? "#d81b1b" : "#d2d2d7"; ctx.stroke();
+      ctx.fillStyle = can ? "#2d2d37" : "#8c8c96";
+      ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
+      ctx.fillText(item.name, rowR.x + 16, rowR.y + 26);
+      ctx.fillStyle = can ? "#d81b1b" : "#a0a0aa";
+      ctx.font = "15px " + getComputedStyle(document.body).fontFamily;
+      ctx.fillText(`${item.cost} 金币`, rowR.x + 16, rowR.y + 52);
+      // 购买按钮
+      const buyW=96, buyH=36;
+      const buyR = {x: rowR.x + rowR.w - buyW - 16, y: rowR.y + 14, w: buyW, h: buyH};
+      roundRect(ctx, buyR.x, buyR.y, buyR.w, buyR.h, 8);
+      ctx.fillStyle = can ? "#d81b1b" : "#c8c8cd"; ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.font = "16px " + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("购买", buyR.x + buyW/2, buyR.y + buyH/2);
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      this._shopItemRects.push({rect: buyR, id: item.id});
+      this._shopItemRects.push({rect: rowR, id: item.id});
+      itemY += 74;
+    }
+    // 反馈消息
+    if (this._shopMessage && this.realTime < this._shopMsgUntil){
+      ctx.fillStyle = "#d81b1b";
+      ctx.font = "15px " + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = "center";
+      ctx.fillText(this._shopMessage, cx + cw/2, cy + ch - 24);
+    }
+  }
+
+  // ===========================================================
+  // 标题栏时钟
+  // ===========================================================
+  _updateDocTitle(){
+    const totalMin = Math.floor(this.time);
+    const day = Math.floor(totalMin / (24*60)) + 1;
+    const hour = Math.floor(totalMin / 60) % 24;
+    const minute = totalMin % 60;
+    const key = `${day}|${hour}|${minute}|${this.state}`;
+    if (this._lastTitleKey === key) return;
+    this._lastTitleKey = key;
+    if (this.state === "play"){
+      document.title = `Mini Metro · 简洁地铁模拟   |   第 ${day} 日  ${String(hour).padStart(2,"0")}:${String(minute).padStart(2,"0")}`;
+    } else {
+      document.title = `Mini Metro · 简洁地铁模拟`;
+    }
+  }
+}
+
+function pointInRect(x,y,r){
+  return x >= r.x && x <= r.x+r.w && y >= r.y && y <= r.y+r.h;
+}
+
+// ===========================================================
+// 启动
+// ===========================================================
+const canvas = document.getElementById("game");
+const game = new MetroGame(canvas);
+
+// 自适应缩放: 始终保持 1200x760 比例铺满窗口
+function fit(){
+  const cssW = window.innerWidth, cssH = window.innerHeight;
+  const ratio = SCREEN_W / SCREEN_H;
+  let w = cssW, h = cssW / ratio;
+  if (h > cssH){ h = cssH; w = cssH * ratio; }
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+}
+window.addEventListener("resize", fit);
+fit();
+
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  game.update(dt);
+  game.draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-name: Deploy Web Build (pygbag → GitHub Pages)
+name: Deploy Web (static HTML) → GitHub Pages
 
 on:
   push:
@@ -21,43 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install pygbag
-        run: |
-          python -m pip install --upgrade pip
-          pip install pygbag
-
-      - name: Verify CJK font asset present
-        run: |
-          if [ ! -f assets/fonts/cjk.otf ] && [ ! -f assets/fonts/cjk.ttf ] && \
-             [ ! -f assets/fonts/NotoSansSC-Regular.otf ] && \
-             [ ! -f assets/fonts/NotoSansSC-Regular.ttf ]; then
-            echo "::warning::No bundled CJK font found in assets/fonts/. Chinese text will be unreadable in the browser. See README."
-          fi
-
-      - name: Build with pygbag
-        run: |
-          # --build 只输出 build/web/, 不启服务器
-          # pygbag 的模板硬编码会寻找 assets/main.py 作为入口
-          # --width/--height 让 canvas 与 SCREEN_W/SCREEN_H 对齐
-          # --ume_block 0: 不强制等待 "Ready to start, please click" 用户手势
-          #               (此游戏不放音频, 浏览器允许无手势启动)
-          python -m pygbag --build \
-            --width 1200 --height 760 \
-            --ume_block 0 \
-            --title "Mini Metro · 简洁地铁模拟" main.py
-
-      - name: Show build output
-        run: ls -la build/web/
-
-      - name: Upload Pages artifact
+      - name: Upload Pages artifact (web/)
         uses: actions/upload-pages-artifact@v3
         with:
-          path: build/web
+          path: web
 
   deploy:
     needs: build
