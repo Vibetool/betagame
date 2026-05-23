@@ -21,7 +21,9 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+print("[metro] importing pygame", flush=True)
 import pygame
+print("[metro] pygame", pygame.version.ver, "imported", flush=True)
 
 
 def load_font(size: int, bold: bool = False) -> pygame.font.Font:
@@ -225,14 +227,19 @@ class Line:
 # ---------- 游戏主类 ----------
 class MetroGame:
     def __init__(self):
+        print("[metro] MetroGame.__init__ start", flush=True)
         pygame.init()
+        print("[metro] pygame.init done", flush=True)
         pygame.display.set_caption("Mini Metro · 简洁地铁模拟")
         self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+        print("[metro] set_mode done", flush=True)
         self.clock = pygame.time.Clock()
         self.font = load_font(18)
+        print("[metro] font loaded", flush=True)
         self.big_font = load_font(36, bold=True)
         self.title_font = load_font(72, bold=True)
         self.sub_font = load_font(22, bold=False)
+        print("[metro] all fonts loaded", flush=True)
         # 状态机: 'home' (开始页) / 'play' (进行中)
         self.state = "home"
         self.mode = "classic"  # 'classic' / 'normal'
@@ -252,6 +259,7 @@ class MetroGame:
         self._shop_message: str = ""
         self._shop_message_until: float = 0.0
         self.reset()
+        print("[metro] MetroGame.__init__ done", flush=True)
 
     # ---- 初始化 / 重置 ----
     def reset(self):
@@ -1212,7 +1220,10 @@ class MetroGame:
 
 async def main():
     """pygbag 期望的 async main 入口。"""
-    await MetroGame().run_async()
+    print("[metro] main() entered, constructing MetroGame", flush=True)
+    g = MetroGame()
+    print("[metro] entering run_async loop", flush=True)
+    await g.run_async()
 
 
 if __name__ == "__main__":

@@ -41,9 +41,11 @@ jobs:
 
       - name: Build with pygbag
         run: |
-          # --build produces build/web/ without launching a server.
-          # pygbag 的模板硬编码会寻找 main.py 作为入口, 所以一定要用 main.py。
-          python -m pygbag --build --ume_block 0 \
+          # --build 只输出 build/web/, 不启服务器
+          # pygbag 的模板硬编码会寻找 assets/main.py 作为入口
+          # --width/--height 让 canvas 与 SCREEN_W/SCREEN_H 对齐
+          python -m pygbag --build \
+            --width 1200 --height 760 \
             --title "Mini Metro · 简洁地铁模拟" main.py
 
       - name: Show build output
