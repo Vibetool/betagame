@@ -44,8 +44,11 @@ jobs:
           # --build 只输出 build/web/, 不启服务器
           # pygbag 的模板硬编码会寻找 assets/main.py 作为入口
           # --width/--height 让 canvas 与 SCREEN_W/SCREEN_H 对齐
+          # --ume_block 0: 不强制等待 "Ready to start, please click" 用户手势
+          #               (此游戏不放音频, 浏览器允许无手势启动)
           python -m pygbag --build \
             --width 1200 --height 760 \
+            --ume_block 0 \
             --title "Mini Metro · 简洁地铁模拟" main.py
 
       - name: Show build output
