@@ -1029,8 +1029,14 @@ class MetroGame {
     for (const [cx,cy,color,mode,label,desc] of slots){
       const hover = (this._homeHover === mode);
       const rect = {x: cx-150, y: cy-90, w:300, h:220};
+      // 阴影 (让卡片漂浮在 3D 隧道之上)
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.45)";
+      ctx.shadowBlur = 22;
+      ctx.shadowOffsetY = 8;
       roundRect(ctx, rect.x, rect.y, rect.w, rect.h, 14);
       ctx.fillStyle = "#fff"; ctx.fill();
+      ctx.restore();
       ctx.lineWidth = hover ? 3 : 2;
       ctx.strokeStyle = hover ? color : "#dcdce0"; ctx.stroke();
       this._drawBird(cx, cy-10, color, hover ? 1.08 : 1.0);
@@ -1044,30 +1050,148 @@ class MetroGame {
       this._homeBirdRects.push({rect, mode});
     }
 
-    // 底部提示 + 署名
-    ctx.fillStyle = "#8c8c96";
+    // 底部提示 + 署名 (深色隧道背景, 用亮色)
+    ctx.fillStyle = "#d8d8e0";
     ctx.font = "14px " + getComputedStyle(document.body).fontFamily;
     ctx.textAlign="center"; ctx.textBaseline = "alphabetic";
     ctx.fillText("点击一只鸟开始  ·  游戏中按 H 返回首页  ·  ESC 退出", SCREEN_W/2, SCREEN_H - 50);
     ctx.textAlign="left";
+    ctx.fillStyle = "#b8b8c0";
     ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
   }
 
   _drawHomeRails(){
+    // 3D 透视: 站在站台尽头, 望向地铁线路另一端的隧道口
     const ctx = this.ctx;
-    const rail = "#aaaab4";
-    const tie = "#9b8264";
-    for (let row=0; row<3; row++){
-      const cy = 290 + row*130;
-      ctx.fillStyle = tie;
-      for (let x=20; x<SCREEN_W-20; x+=28){
-        roundRect(ctx, x, cy-9, 18, 18, 2);
-        ctx.fill();
-      }
-      ctx.strokeStyle = rail; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(0,cy-11); ctx.lineTo(SCREEN_W, cy-11); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0,cy+11); ctx.lineTo(SCREEN_W, cy+11); ctx.stroke();
+    const W = SCREEN_W, H = SCREEN_H;
+    const VPx = W/2;
+    const VPy = 250;                 // 消失点 (隧道远端)
+    const platBotY = H;              // 近端站台前沿 / 屏幕底
+    const platTopY = VPy + 28;       // 远端站台前沿汇聚高度
+    const trackHalfBot = 145;        // 近端两根钢轨外缘到中线的距离
+    const trackHalfTop = 8;          // 远端轨道收缩到 8 px
+
+    // 1) 站厅顶部 (ceiling) — 浅米色, 让大标题保持深色易读
+    const ceiling = ctx.createLinearGradient(0, 0, 0, VPy);
+    ceiling.addColorStop(0, "#f0ecdc");
+    ceiling.addColorStop(1, "#cfc7b1");
+    ctx.fillStyle = ceiling;
+    ctx.fillRect(0, 0, W, VPy);
+
+    // 顶部一些柔和的"灯带" 横向条纹, 暗示天花板
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 1;
+    for (const y of [60, 110, 160, 210]){
+      const inset = (y / VPy) * (W * 0.35);
+      ctx.beginPath();
+      ctx.moveTo(inset, y);
+      ctx.lineTo(W - inset, y);
+      ctx.stroke();
     }
+
+    // 2) 远景隧道底色 (深灰) — VPy 以下
+    ctx.fillStyle = "#3a3a44";
+    ctx.fillRect(0, VPy, W, H - VPy);
+
+    // 3) 站台地面 (左右两块从近端到远端收敛的梯形)
+    //    站台朝向轨道的一侧有黄色安全线
+    // 左站台 顶面
+    ctx.fillStyle = "#9b9aa0";
+    ctx.beginPath();
+    ctx.moveTo(0, platBotY);
+    ctx.lineTo(VPx - trackHalfBot - 18, platBotY);
+    ctx.lineTo(VPx - trackHalfTop - 4, platTopY);
+    ctx.lineTo(0, platTopY - 16);
+    ctx.closePath();
+    ctx.fill();
+    // 右站台 顶面
+    ctx.beginPath();
+    ctx.moveTo(W, platBotY);
+    ctx.lineTo(VPx + trackHalfBot + 18, platBotY);
+    ctx.lineTo(VPx + trackHalfTop + 4, platTopY);
+    ctx.lineTo(W, platTopY - 16);
+    ctx.closePath();
+    ctx.fill();
+
+    // 4) 站台立面 (朝向轨道那一侧的暗色窄壁)
+    ctx.fillStyle = "#34343c";
+    ctx.beginPath();
+    ctx.moveTo(VPx - trackHalfBot - 18, platBotY);
+    ctx.lineTo(VPx - trackHalfBot, platBotY);
+    ctx.lineTo(VPx - trackHalfTop, platTopY);
+    ctx.lineTo(VPx - trackHalfTop - 4, platTopY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(VPx + trackHalfBot + 18, platBotY);
+    ctx.lineTo(VPx + trackHalfBot, platBotY);
+    ctx.lineTo(VPx + trackHalfTop, platTopY);
+    ctx.lineTo(VPx + trackHalfTop + 4, platTopY);
+    ctx.closePath();
+    ctx.fill();
+
+    // 5) 黄色安全线 (站台边缘)
+    ctx.strokeStyle = "#f5c038";
+    ctx.lineWidth = 6;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(VPx - trackHalfBot - 18, platBotY);
+    ctx.lineTo(VPx - trackHalfTop - 4, platTopY);
+    ctx.moveTo(VPx + trackHalfBot + 18, platBotY);
+    ctx.lineTo(VPx + trackHalfTop + 4, platTopY);
+    ctx.stroke();
+
+    // 6) 道砟 / 轨道地面 (两轨之间的深棕色梯形)
+    ctx.fillStyle = "#241c14";
+    ctx.beginPath();
+    ctx.moveTo(VPx - trackHalfBot, platBotY);
+    ctx.lineTo(VPx + trackHalfBot, platBotY);
+    ctx.lineTo(VPx + trackHalfTop, platTopY);
+    ctx.lineTo(VPx - trackHalfTop, platTopY);
+    ctx.closePath();
+    ctx.fill();
+
+    // 7) 轨枕 — 沿透视轴, 越远越密越小
+    ctx.fillStyle = "#5e4838";
+    for (let i = 0; i < 36; i++){
+      const t = 1 - Math.pow(0.88, i);   // 0 = 近, 1 = 远
+      if (t > 0.99) break;
+      const y = platBotY + (platTopY - platBotY) * t;
+      const halfW = trackHalfBot + (trackHalfTop - trackHalfBot) * t;
+      const thickness = Math.max(2, 14 * (1 - t));
+      ctx.fillRect(VPx - halfW - 2, y - thickness/2, (halfW + 2) * 2, thickness);
+    }
+
+    // 8) 4 根钢轨 — 双轨制, 浅亮高光
+    ctx.strokeStyle = "#d4d4dc";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    const railsBot = [-trackHalfBot, -trackHalfBot * 0.55,
+                      trackHalfBot * 0.55, trackHalfBot];
+    const railsTop = [-trackHalfTop, -trackHalfTop * 0.55,
+                      trackHalfTop * 0.55, trackHalfTop];
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++){
+      ctx.moveTo(VPx + railsBot[i], platBotY);
+      ctx.lineTo(VPx + railsTop[i], platTopY);
+    }
+    ctx.stroke();
+
+    // 9) 隧道远端的"暗洞" — 营造纵深
+    const tunnel = ctx.createRadialGradient(VPx, VPy + 8, 2, VPx, VPy + 8, 90);
+    tunnel.addColorStop(0,   "#08080e");
+    tunnel.addColorStop(0.5, "rgba(20,20,28,0.8)");
+    tunnel.addColorStop(1,   "rgba(60,60,70,0)");
+    ctx.fillStyle = tunnel;
+    ctx.fillRect(VPx - 110, VPy - 40, 220, 160);
+
+    // 10) 站厅天花板和隧道交界处的水平阴影线
+    ctx.strokeStyle = "rgba(0,0,0,0.4)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, VPy);
+    ctx.lineTo(W, VPy);
+    ctx.stroke();
   }
 
   _drawBird(cx, cy, color, scale){
