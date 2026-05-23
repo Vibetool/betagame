@@ -233,6 +233,18 @@ class MetroGame:
         # 首页两只鸟的点击区域 (运行时填充)
         self._home_bird_rects: List[Tuple[pygame.Rect, str]] = []
         self._home_hover_mode: Optional[str] = None
+        # ---- 持久状态 (跨模式 / 跨局累计, 不会被 reset 清掉) ----
+        self.coins: int = 0
+        self.total_deliveries: int = 0           # 任何模式下累计送达
+        self._coin_credited_deliveries: int = 0  # 已折算成金币的送达数
+        self.active_boosts: List[dict] = []
+        self.active_carriage_buffs: List[dict] = []
+        self.shop_open: bool = False
+        self._shop_item_rects: List[Tuple[pygame.Rect, str]] = []
+        self._shop_close_rect: Optional[pygame.Rect] = None
+        self._shop_button_rect: Optional[pygame.Rect] = None
+        self._shop_message: str = ""
+        self._shop_message_until: float = 0.0
         self.reset()
 
     # ---- 初始化 / 重置 ----
@@ -253,17 +265,8 @@ class MetroGame:
         self.speed_scale = 1.0
         self.reward_alt = 0
 
-        # 氪金商城状态
-        self.coins = 0
-        self._coin_pending_score = 0   # 已为多少送达发放过金币
-        self.active_boosts: List[dict] = []          # 速度 boost
-        self.active_carriage_buffs: List[dict] = []  # 车厢载客 +N buff (限时)
-        self.shop_open = False
-        self._shop_item_rects: List[Tuple[pygame.Rect, str]] = []
-        self._shop_close_rect: Optional[pygame.Rect] = None
-        self._shop_button_rect: Optional[pygame.Rect] = None
-        self._shop_message: str = ""           # 临时反馈, e.g. "金币不足"
-        self._shop_message_until: float = 0.0  # 反馈消失时刻 (real_time 秒)
+        # 注: coins / total_deliveries / active_boosts / active_carriage_buffs
+        # 这些字段是跨局持久状态, 在 __init__ 里只初始化一次, reset 不动它们
 
         # 生成 2 人多区 + 1 人少区
         self._generate_zones()
@@ -390,14 +393,27 @@ class MetroGame:
             pygame.quit()
             sys.exit(0)
         if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+            if self.shop_open:
+                self.shop_open = False
+                return
             if self.state == "play":
-                # 返回首页
                 self.state = "home"
                 return
             pygame.quit()
             sys.exit(0)
+        # ---- 商城打开时 (任何状态), 鼠标事件优先给商城吃掉 ----
+        if self.shop_open and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                self._on_shop_click(ev.pos)
+            return
         # ---- 首页输入 ----
         if self.state == "home":
+            # 主页商城按钮
+            if (ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1
+                    and self._shop_button_rect
+                    and self._shop_button_rect.collidepoint(ev.pos)):
+                self.shop_open = True
+                return
             if ev.type == pygame.MOUSEMOTION:
                 self._home_hover_mode = None
                 for rect, mode in self._home_bird_rects:
@@ -425,21 +441,7 @@ class MetroGame:
             elif ev.key == pygame.K_h:
                 self.state = "home"
                 return
-            elif ev.key == pygame.K_b:
-                self.shop_open = not self.shop_open
-                return
         if self.game_over:
-            return
-        # ---- 商城打开时, 鼠标事件优先给商城吃掉 ----
-        if self.shop_open and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
-            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
-                self._on_shop_click(ev.pos)
-            return
-        # ---- 顶部商城按钮: 点击切换 ----
-        if (ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1
-                and self._shop_button_rect
-                and self._shop_button_rect.collidepoint(ev.pos)):
-            self.shop_open = not self.shop_open
             return
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             self._on_left_down(ev.pos)
@@ -601,9 +603,10 @@ class MetroGame:
         return sum(b["bonus"] for b in self.active_carriage_buffs)
 
     def _tick_coins(self):
-        """根据 score 结算尚未发放的金币。"""
-        while self.score - self._coin_pending_score >= COIN_PER_DELIVERIES:
-            self._coin_pending_score += COIN_PER_DELIVERIES
+        """根据累计送达结算尚未发放的金币。跨模式/跨局保留。"""
+        while (self.total_deliveries - self._coin_credited_deliveries
+               >= COIN_PER_DELIVERIES):
+            self._coin_credited_deliveries += COIN_PER_DELIVERIES
             self.coins += 1
 
     def _buy_shop_item(self, item_id: str):
@@ -746,10 +749,11 @@ class MetroGame:
         for p in tr.passengers:
             if p == s.shape:
                 self.score += 1
+                self.total_deliveries += 1
             else:
                 new_passengers.append(p)
         tr.passengers = new_passengers
-        self._tick_coins()  # 每 100 次送达发 1 枚金币
+        self._tick_coins()  # 累计每 100 次送达发 1 枚金币
         # 上客 (周边进入): 该线路能到的目的优先
         line_shapes = {self.stations[i].shape for i in line.stations}
         remaining = []
@@ -765,18 +769,18 @@ class MetroGame:
     def draw(self):
         if self.state == "home":
             self._draw_home()
-            pygame.display.flip()
-            return
-        self.screen.fill(BG_COLOR)
-        self._draw_lines()
-        self._draw_drag_preview()
-        self._draw_trains()
-        self._draw_stations()
-        self._draw_hud()
-        if self.paused and not self.game_over:
-            self._draw_center_text("已暂停 (空格继续)", (60, 60, 60))
-        if self.game_over:
-            self._draw_center_text(f"游戏结束  送达乘客: {self.score}  按 R 重开", DANGER_COLOR)
+        else:
+            self.screen.fill(BG_COLOR)
+            self._draw_lines()
+            self._draw_drag_preview()
+            self._draw_trains()
+            self._draw_stations()
+            self._draw_hud()
+            if self.paused and not self.game_over:
+                self._draw_center_text("已暂停 (空格继续)", (60, 60, 60))
+            if self.game_over:
+                self._draw_center_text(
+                    f"游戏结束  送达乘客: {self.score}  按 R 重开", DANGER_COLOR)
         if self.shop_open:
             self._draw_shop()
         pygame.display.flip()
@@ -847,6 +851,21 @@ class MetroGame:
     def _draw_home(self):
         self.screen.fill((250, 248, 240))
         self._draw_home_rails()
+        # ---- 顶左: 累计送达 ----
+        accum_label = self.sub_font.render(
+            f"累计送达: {self.total_deliveries}    金币: {self.coins}",
+            True, (60, 60, 70))
+        self.screen.blit(accum_label, (30, 30))
+        # ---- 顶右: 商城按钮 ----
+        shop_label = self.sub_font.render(f"氪金商城  ({self.coins})",
+                                          True, (255, 255, 255))
+        bw = shop_label.get_width() + 28
+        bh = shop_label.get_height() + 14
+        shop_rect = pygame.Rect(SCREEN_W - bw - 30, 24, bw, bh)
+        pygame.draw.rect(self.screen, (216, 27, 27), shop_rect, border_radius=10)
+        pygame.draw.rect(self.screen, (140, 18, 18), shop_rect, width=2, border_radius=10)
+        self.screen.blit(shop_label, shop_label.get_rect(center=shop_rect.center))
+        self._shop_button_rect = shop_rect
         # 标题 - 上偏中
         title = self.title_font.render("Mini Metro", True, (35, 35, 45))
         title_rect = title.get_rect(center=(SCREEN_W // 2, 150))
@@ -862,9 +881,9 @@ class MetroGame:
         bird_y = SCREEN_H // 2 + 60
         positions = [
             (SCREEN_W // 3, bird_y, (32, 95, 191), "classic", "经典模式",
-             "夜间 21:00–06:00 客流 −30%"),
+             "夜间 21:00-06:00 客流 -30%"),
             (SCREEN_W * 2 // 3, bird_y, (216, 27, 27), "normal", "正常模式",
-             "夜间 −30%  ·  午间 12:00–13:00 客流 −20%"),
+             "夜间 -30%  ·  午间 12:00-13:00 客流 -20%"),
         ]
         for cx, cy, color, mode, label, desc in positions:
             hover = (self._home_hover_mode == mode)
@@ -1132,19 +1151,9 @@ class MetroGame:
             row2_parts.append(f"车厢+{b['bonus']} {rem//60:02d}:{rem%60:02d}")
         row2 = "    ".join(row2_parts)
         self.screen.blit(self.font.render(row2, True, TEXT_COLOR), (16, mid_y + 5))
-        # ---- 右上角: 商城按钮 ----
-        btn_label = f"商城  金币 {self.coins}  [B]"
-        btn_surf = self.font.render(btn_label, True, (255, 255, 255))
-        btn_w = btn_surf.get_width() + 20
-        btn_h = btn_surf.get_height() + 10
-        btn_rect = pygame.Rect(SCREEN_W - btn_w - 16, 6, btn_w, btn_h)
-        pygame.draw.rect(self.screen, (216, 27, 27), btn_rect, border_radius=6)
-        pygame.draw.rect(self.screen, (140, 18, 18), btn_rect, width=2, border_radius=6)
-        self.screen.blit(btn_surf, btn_surf.get_rect(center=btn_rect.center))
-        self._shop_button_rect = btn_rect
         # ---- 屏幕底部右侧: 操作提示 (避免与 HUD 第二行重叠) ----
         hint = ("左键空地建站 · 拖线连线 · 端点延伸 · 右键长按拖动站 · "
-                "空格暂停 · +/− 调速 · B 商城 · R 重开 · H 首页")
+                "空格暂停 · +/− 调速 · R 重开 · H 首页 (商城)")
         s = self.font.render(hint, True, (130, 130, 135))
         self.screen.blit(s, (SCREEN_W - s.get_width() - 16,
                              SCREEN_H - s.get_height() - 10))
