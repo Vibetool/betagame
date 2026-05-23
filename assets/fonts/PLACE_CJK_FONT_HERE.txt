@@ -1,0 +1,19 @@
+把一个中文字体文件放到本目录, 命名为下列之一即可被自动加载:
+
+  cjk.otf
+  cjk.ttf
+  cjk.ttc
+  NotoSansSC-Regular.otf
+  NotoSansSC-Regular.ttf
+
+推荐下载 (二选一):
+- Noto Sans SC (Google / OFL):
+  https://fonts.google.com/noto/specimen/Noto+Sans+SC
+- 思源黑体 / Source Han Sans (Adobe / OFL):
+  https://github.com/adobe-fonts/source-han-sans/tree/release
+
+下载后改名为 cjk.otf 放在 assets/fonts/cjk.otf 即可.
+
+为什么需要这个: 浏览器版 (pygbag/WebAssembly) 不能访问操作系统字体,
+必须靠项目内附带的字体文件渲染中文. 桌面版上有这个文件也会优先使用它,
+保证不同电脑显示一致.

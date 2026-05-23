@@ -13,6 +13,7 @@
 每隔一段时间随机新增车站; 每隔一段时间获得 1 节新车厢 或 1 条新线路 (轮换奖励)
 """
 
+import asyncio
 import math
 import os
 import random
@@ -30,6 +31,11 @@ def load_font(size: int, bold: bool = False) -> pygame.font.Font:
     只在所有文件路径都不存在时, 才退回 pygame.font.SysFont; 最终再回到默认字体。
     """
     candidates: List[str] = []
+    # 1) 项目内置 CJK 字体 (跨平台首选; Web 构建必须靠它)
+    here = os.path.dirname(os.path.abspath(__file__))
+    for fname in ("cjk.otf", "cjk.ttf", "cjk.ttc",
+                  "NotoSansSC-Regular.otf", "NotoSansSC-Regular.ttf"):
+        candidates.append(os.path.join(here, "assets", "fonts", fname))
     if sys.platform.startswith("win"):
         win_root = os.environ.get("SystemRoot", r"C:\Windows")
         fdir = os.path.join(win_root, "Fonts")
@@ -1187,14 +1193,28 @@ class MetroGame:
         self.screen.blit(surf, rect)
 
     # ---- 主循环 ----
-    def run(self):
+    async def run_async(self):
+        """async 循环, 兼容 pygbag (浏览器 WASM)。
+        每帧 await asyncio.sleep(0) 让出控制权给浏览器事件循环。
+        """
         while True:
             dt = self.clock.tick(FPS) / 1000.0
             for ev in pygame.event.get():
                 self.handle_event(ev)
             self.update(dt)
             self.draw()
+            await asyncio.sleep(0)
+
+    def run(self):
+        """同步入口 - 桌面运行时使用。"""
+        asyncio.run(self.run_async())
+
+
+async def main():
+    """pygbag 期望的 async main 入口。"""
+    await MetroGame().run_async()
 
 
 if __name__ == "__main__":
-    MetroGame().run()
+    # 在桌面/Web 都使用 asyncio.run(main()); pygbag 会识别这个模式
+    asyncio.run(main())

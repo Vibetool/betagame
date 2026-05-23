@@ -3,10 +3,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# PyInstaller
+# PyInstaller / pygbag
 build/
 dist/
 *.spec
+*.apk
 
 # macOS
 .DS_Store
