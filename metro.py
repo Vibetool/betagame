@@ -135,6 +135,16 @@ CARRIAGE_CAPACITY = 3        # 附加车厢载客 3
 HIGH_DENSITY_SPAWN = 6.0     # 人多区中心: 6 秒/人
 LOW_DENSITY_SPAWN = 10.0     # 人少区中心: 10 秒/人
 
+# 氪金商城
+COIN_PER_DELIVERIES = 100    # 每 100 次送达 = 1 金币
+SHOP_ITEMS = [
+    # (id, 描述, 价格, 类型, 参数)
+    ("boost_30_10", "速度 +30%  ·  10 分钟", 1, "boost", {"percent": 30, "duration": 600}),
+    ("boost_50_10", "速度 +50%  ·  10 分钟", 2, "boost", {"percent": 50, "duration": 600}),
+    ("boost_30_20", "速度 +30%  ·  20 分钟", 2, "boost", {"percent": 30, "duration": 1200}),
+    ("carriage_1",  "每车厢载客 +1  (永久)", 1, "carriage", {"bonus": 1}),
+]
+
 # 车厢按载客数着色 (0/1/2/3)
 CAR_COLORS = [
     (96, 156, 230),   # 0 蓝
@@ -186,8 +196,8 @@ class Train:
     passengers: List[str] = field(default_factory=list)
     carriages: int = 0     # 额外车厢数
 
-    def capacity(self) -> int:
-        return TRAIN_CAPACITY_BASE + self.carriages * CARRIAGE_CAPACITY
+    def capacity(self, carriage_bonus: int = 0) -> int:
+        return TRAIN_CAPACITY_BASE + self.carriages * (CARRIAGE_CAPACITY + carriage_bonus)
 
 
 @dataclass
@@ -241,6 +251,18 @@ class MetroGame:
         self.game_over = False
         self.speed_scale = 1.0
         self.reward_alt = 0
+
+        # 氪金商城状态
+        self.coins = 0
+        self._coin_pending_score = 0   # 已为多少送达发放过金币
+        self.carriage_capacity_bonus = 0   # 永久车厢载客加成
+        self.active_boosts: List[dict] = []  # [{'percent': 30, 'remaining': 600}, ...]
+        self.shop_open = False
+        self._shop_item_rects: List[Tuple[pygame.Rect, str]] = []
+        self._shop_close_rect: Optional[pygame.Rect] = None
+        self._shop_button_rect: Optional[pygame.Rect] = None
+        self._shop_message: str = ""           # 临时反馈, e.g. "金币不足"
+        self._shop_message_until: float = 0.0  # 反馈消失时刻 (real_time 秒)
 
         # 生成 2 人多区 + 1 人少区
         self._generate_zones()
@@ -402,7 +424,21 @@ class MetroGame:
             elif ev.key == pygame.K_h:
                 self.state = "home"
                 return
+            elif ev.key == pygame.K_b:
+                self.shop_open = not self.shop_open
+                return
         if self.game_over:
+            return
+        # ---- 商城打开时, 鼠标事件优先给商城吃掉 ----
+        if self.shop_open and ev.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+                self._on_shop_click(ev.pos)
+            return
+        # ---- 顶部商城按钮: 点击切换 ----
+        if (ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1
+                and self._shop_button_rect
+                and self._shop_button_rect.collidepoint(ev.pos)):
+            self.shop_open = not self.shop_open
             return
         if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
             self._on_left_down(ev.pos)
@@ -415,6 +451,16 @@ class MetroGame:
             self._on_right_down(ev.pos)
         elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 3:
             self._on_right_up(ev.pos)
+
+    def _on_shop_click(self, pos):
+        # 关闭按钮
+        if self._shop_close_rect and self._shop_close_rect.collidepoint(pos):
+            self.shop_open = False
+            return
+        for rect, item_id in self._shop_item_rects:
+            if rect.collidepoint(pos):
+                self._buy_shop_item(item_id)
+                return
 
     def _on_left_down(self, pos):
         si = self._station_at(*pos)
@@ -542,16 +588,57 @@ class MetroGame:
             mult *= 0.8
         return mult
 
+    # ---- 商城: 速度倍率 / 推进 boost 倒计时 / 结算金币 ----
+    def _speed_multiplier(self) -> float:
+        """返回当前总速度倍率 (各 active boost 的百分比累加)。"""
+        if not self.active_boosts:
+            return 1.0
+        return 1.0 + sum(b["percent"] / 100.0 for b in self.active_boosts)
+
+    def _tick_coins(self):
+        """根据 score 结算尚未发放的金币。"""
+        while self.score - self._coin_pending_score >= COIN_PER_DELIVERIES:
+            self._coin_pending_score += COIN_PER_DELIVERIES
+            self.coins += 1
+
+    def _buy_shop_item(self, item_id: str):
+        for sid, name, cost, kind, params in SHOP_ITEMS:
+            if sid != item_id:
+                continue
+            if self.coins < cost:
+                self._shop_message = f"金币不足 (需要 {cost})"
+                self._shop_message_until = self.time + 2.0
+                return False
+            self.coins -= cost
+            if kind == "boost":
+                self.active_boosts.append({
+                    "percent": params["percent"],
+                    "remaining": float(params["duration"]),
+                })
+                self._shop_message = f"已激活: {name}"
+            elif kind == "carriage":
+                self.carriage_capacity_bonus += params["bonus"]
+                self._shop_message = f"已永久生效: {name}"
+            self._shop_message_until = self.time + 2.0
+            return True
+        return False
+
     # ---- 更新 ----
     def update(self, dt: float):
         if self.state != "play":
             return
         if self.paused or self.game_over:
             return
+        raw_dt = dt
         dt *= self.speed_scale
         self.time += dt
         self.station_grant_timer += dt
         self.reward_timer += dt
+        # 推进 boost 倒计时 (不随游戏速度倍率, 用真实秒数)
+        if self.active_boosts:
+            for b in self.active_boosts:
+                b["remaining"] -= raw_dt
+            self.active_boosts = [b for b in self.active_boosts if b["remaining"] > 0]
 
         # 周期发放可建车站预算 (手动放置, 不再自动生成新站)
         if self.station_grant_timer >= NEW_STATION_INTERVAL:
@@ -581,6 +668,7 @@ class MetroGame:
 
 
         # 列车运动
+        speed_mult = self._speed_multiplier()
         for li, line in enumerate(self.lines):
             if len(line.stations) < 2:
                 continue
@@ -591,7 +679,7 @@ class MetroGame:
                 seg_len = self._seg_length(line, tr.seg_idx)
                 if seg_len < 1e-3:
                     seg_len = 1.0
-                tr.t += (TRAIN_SPEED / seg_len) * dt * tr.direction
+                tr.t += (TRAIN_SPEED * speed_mult / seg_len) * dt * tr.direction
                 while tr.t >= 1.0 or tr.t <= 0.0:
                     if tr.t >= 1.0:
                         # 到达后一个站
@@ -648,11 +736,13 @@ class MetroGame:
             else:
                 new_passengers.append(p)
         tr.passengers = new_passengers
+        self._tick_coins()  # 每 100 次送达发 1 枚金币
         # 上客 (周边进入): 该线路能到的目的优先
         line_shapes = {self.stations[i].shape for i in line.stations}
         remaining = []
         for p in s.passengers:
-            if len(tr.passengers) < tr.capacity() and p in line_shapes and p != s.shape:
+            if (len(tr.passengers) < tr.capacity(self.carriage_capacity_bonus)
+                    and p in line_shapes and p != s.shape):
                 tr.passengers.append(p)
             else:
                 remaining.append(p)
@@ -674,7 +764,71 @@ class MetroGame:
             self._draw_center_text("已暂停 (空格继续)", (60, 60, 60))
         if self.game_over:
             self._draw_center_text(f"游戏结束  送达乘客: {self.score}  按 R 重开", DANGER_COLOR)
+        if self.shop_open:
+            self._draw_shop()
         pygame.display.flip()
+
+    # ---- 氪金商城 ----
+    def _draw_shop(self):
+        # 暗化背景
+        overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        overlay.fill((20, 20, 28, 170))
+        self.screen.blit(overlay, (0, 0))
+        # 居中卡片
+        card_w, card_h = 600, 460
+        card_rect = pygame.Rect(0, 0, card_w, card_h)
+        card_rect.center = (SCREEN_W // 2, SCREEN_H // 2)
+        pygame.draw.rect(self.screen, (255, 255, 255), card_rect, border_radius=14)
+        pygame.draw.rect(self.screen, (45, 45, 55), card_rect, width=2, border_radius=14)
+        # 标题 + 金币
+        title = self.big_font.render("氪金商城", True, (45, 45, 55))
+        self.screen.blit(title, (card_rect.x + 24, card_rect.y + 18))
+        coin_label = self.sub_font.render(f"金币: {self.coins}    (每送达 100 次 +1 枚)",
+                                          True, (216, 27, 27))
+        self.screen.blit(coin_label, (card_rect.x + 24, card_rect.y + 70))
+        # 关闭按钮
+        close_rect = pygame.Rect(card_rect.right - 44, card_rect.top + 14, 30, 30)
+        pygame.draw.rect(self.screen, (240, 240, 245), close_rect, border_radius=6)
+        pygame.draw.rect(self.screen, (140, 140, 150), close_rect, width=1, border_radius=6)
+        x_label = self.font.render("✕", True, (60, 60, 70))
+        self.screen.blit(x_label, x_label.get_rect(center=close_rect.center))
+        self._shop_close_rect = close_rect
+        # 商品列表
+        self._shop_item_rects = []
+        item_y = card_rect.y + 110
+        for sid, name, cost, kind, _params in SHOP_ITEMS:
+            row_rect = pygame.Rect(card_rect.x + 20, item_y, card_w - 40, 64)
+            affordable = self.coins >= cost
+            bg_col = (250, 250, 252) if affordable else (244, 244, 246)
+            pygame.draw.rect(self.screen, bg_col, row_rect, border_radius=10)
+            pygame.draw.rect(self.screen,
+                             (216, 27, 27) if affordable else (210, 210, 215),
+                             row_rect, width=2, border_radius=10)
+            # 商品名
+            name_surf = self.sub_font.render(name, True,
+                                             (45, 45, 55) if affordable else (140, 140, 150))
+            self.screen.blit(name_surf, (row_rect.x + 16, row_rect.y + 8))
+            # 价格 + 购买按钮
+            price_label = f"{cost} 金币"
+            p_surf = self.font.render(price_label, True,
+                                      (216, 27, 27) if affordable else (160, 160, 170))
+            self.screen.blit(p_surf, (row_rect.x + 16, row_rect.y + 36))
+            buy_w, buy_h = 96, 36
+            buy_rect = pygame.Rect(row_rect.right - buy_w - 16, row_rect.y + 14, buy_w, buy_h)
+            pygame.draw.rect(self.screen,
+                             (216, 27, 27) if affordable else (200, 200, 205),
+                             buy_rect, border_radius=8)
+            buy_text = self.font.render("购买", True, (255, 255, 255))
+            self.screen.blit(buy_text, buy_text.get_rect(center=buy_rect.center))
+            self._shop_item_rects.append((buy_rect, sid))
+            # 整行也可点
+            self._shop_item_rects.append((row_rect, sid))
+            item_y += 74
+        # 临时反馈消息
+        if self._shop_message and self.time < self._shop_message_until:
+            msg = self.font.render(self._shop_message, True, (216, 27, 27))
+            self.screen.blit(msg, msg.get_rect(center=(card_rect.centerx,
+                                                      card_rect.bottom - 24)))
 
     # ---- 首页 ----
     def _draw_home(self):
@@ -936,21 +1090,49 @@ class MetroGame:
         rate_mult = self._passenger_rate_multiplier()
         if rate_mult < 0.999:
             mode_label += f" (客流 x{rate_mult:.2f})"
-        # ---- 第一行: 模式 / 送达 / 车站 / 可建站 / 速度 ----
-        row1 = (f"模式: {mode_label}    "
-                f"送达: {self.score}    "
-                f"车站: {len(self.stations)}    "
-                f"可建站: {self.available_stations}    "
-                f"速度: x{self.speed_scale:.2f}")
+        # ---- 第一行: 模式 / 送达 / 车站 / 可建站 / 速度 / 速度倍率 (若 boost) ----
+        speed_mult = self._speed_multiplier()
+        row1_parts = [
+            f"模式: {mode_label}",
+            f"送达: {self.score}",
+            f"车站: {len(self.stations)}",
+            f"可建站: {self.available_stations}",
+            f"速度: x{self.speed_scale:.2f}",
+        ]
+        if speed_mult > 1.0:
+            row1_parts.append(f"地铁倍速: x{speed_mult:.2f}")
+        row1 = "    ".join(row1_parts)
         self.screen.blit(self.font.render(row1, True, TEXT_COLOR), (16, 8))
-        # ---- 第二行: 可用线路 / 可用车厢 ----
-        row2 = f"可用线路: {self.available_lines}    可用车厢: {self.available_carriages}"
+        # ---- 第二行: 可用线路 / 可用车厢 / 金币 / 车厢加成 ----
+        row2_parts = [
+            f"可用线路: {self.available_lines}",
+            f"可用车厢: {self.available_carriages}",
+            f"金币: {self.coins}",
+        ]
+        if self.carriage_capacity_bonus:
+            row2_parts.append(f"车厢+{self.carriage_capacity_bonus}人")
+        # active boosts 倒计时
+        for b in self.active_boosts:
+            rem = max(0, int(b["remaining"]))
+            row2_parts.append(f"+{b['percent']}% {rem//60:02d}:{rem%60:02d}")
+        row2 = "    ".join(row2_parts)
         self.screen.blit(self.font.render(row2, True, TEXT_COLOR), (16, mid_y + 5))
-        # ---- 右侧: 提示, 单行放在第二行右侧, 避免与第一行重叠 ----
-        hint = ("左键空地建站 · 站间拖线连线 · 端点延伸 · 右键长按拖动站 · "
-                "空格暂停 · +/− 调速 · R 重开 · H 首页")
+        # ---- 右上角: 商城按钮 ----
+        btn_label = f"商城  金币 {self.coins}  [B]"
+        btn_surf = self.font.render(btn_label, True, (255, 255, 255))
+        btn_w = btn_surf.get_width() + 20
+        btn_h = btn_surf.get_height() + 10
+        btn_rect = pygame.Rect(SCREEN_W - btn_w - 16, 6, btn_w, btn_h)
+        pygame.draw.rect(self.screen, (216, 27, 27), btn_rect, border_radius=6)
+        pygame.draw.rect(self.screen, (140, 18, 18), btn_rect, width=2, border_radius=6)
+        self.screen.blit(btn_surf, btn_surf.get_rect(center=btn_rect.center))
+        self._shop_button_rect = btn_rect
+        # ---- 屏幕底部右侧: 操作提示 (避免与 HUD 第二行重叠) ----
+        hint = ("左键空地建站 · 拖线连线 · 端点延伸 · 右键长按拖动站 · "
+                "空格暂停 · +/− 调速 · B 商城 · R 重开 · H 首页")
         s = self.font.render(hint, True, (130, 130, 135))
-        self.screen.blit(s, (SCREEN_W - s.get_width() - 16, mid_y + 5))
+        self.screen.blit(s, (SCREEN_W - s.get_width() - 16,
+                             SCREEN_H - s.get_height() - 10))
         # 左下角: 署名
         powered_surf = self.font.render("Powered by 江星野", True, (130, 130, 135))
         self.screen.blit(powered_surf, (16, SCREEN_H - powered_surf.get_height() - 10))
