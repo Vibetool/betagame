@@ -66,6 +66,87 @@
     white-space: nowrap;
     border: 0;
   }
+  /* 用户徽章 (顶左) */
+  #user-badge {
+    position: fixed; top: 14px; left: 16px;
+    display: flex; gap: 10px; align-items: center;
+    z-index: 50;
+    font-size: 14px;
+  }
+  #user-badge button {
+    border: 0; padding: 7px 14px; border-radius: 8px;
+    background: #d81b1b; color: #fff; cursor: pointer;
+    font-weight: 600; font-family: inherit; font-size: 14px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+  }
+  #user-badge button.secondary {
+    background: #fff; color: #3c3c46; border: 1px solid #cdcdd6;
+  }
+  #user-badge .who {
+    background: rgba(255,255,255,0.92);
+    border: 1px solid #cdcdd6;
+    border-radius: 8px; padding: 6px 12px; color: #28282d;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  }
+  /* 模态: 登录注册 / 排行榜 */
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(20,20,28,0.55);
+    z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .modal[hidden] { display: none !important; }
+  .modal .card {
+    background: #fff; border-radius: 14px;
+    width: min(420px, 92vw);
+    max-height: 90vh; overflow: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    padding: 22px 22px 18px;
+    color: #28282d;
+  }
+  .modal h2 {
+    margin: 0 0 10px; font-size: 22px; color: #2d2d37;
+  }
+  .modal .tabs { display: flex; gap: 8px; margin: 8px 0 14px; }
+  .modal .tabs button {
+    flex: 1; padding: 8px 10px; border: 0; border-bottom: 2px solid transparent;
+    background: transparent; cursor: pointer; font-family: inherit;
+    font-size: 15px; color: #6e6e78;
+  }
+  .modal .tabs button.active {
+    color: #d81b1b; border-bottom-color: #d81b1b; font-weight: 600;
+  }
+  .modal label { display: block; font-size: 13px; color: #6e6e78; margin: 10px 0 4px; }
+  .modal input {
+    width: 100%; box-sizing: border-box;
+    padding: 9px 11px; border-radius: 8px; border: 1px solid #cdcdd6;
+    font-size: 15px; font-family: inherit;
+  }
+  .modal input:focus { outline: none; border-color: #d81b1b; }
+  .modal .primary {
+    margin-top: 14px; width: 100%;
+    background: #d81b1b; color: #fff; padding: 10px;
+    border: 0; border-radius: 8px; font-weight: 600; cursor: pointer;
+    font-family: inherit; font-size: 15px;
+  }
+  .modal .primary:disabled { background: #c8c8cd; cursor: not-allowed; }
+  .modal .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+  .modal .msg.err { color: #d81b1b; }
+  .modal .msg.ok  { color: #2baa4c; }
+  .modal .close {
+    float: right; cursor: pointer; color: #8c8c96;
+    font-size: 20px; line-height: 1; padding: 0 4px;
+    user-select: none;
+  }
+  .modal .close:hover { color: #28282d; }
+  /* 排行榜 */
+  #leaderboard-modal .card { width: min(520px, 95vw); }
+  table.lb { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+  table.lb th { text-align: left; color: #6e6e78; font-weight: 500; padding: 6px 8px; border-bottom: 1px solid #ececf0; }
+  table.lb td { padding: 8px; border-bottom: 1px solid #f4f4f6; }
+  table.lb tr.me td { background: #fff8e6; }
+  table.lb td.rank { width: 40px; color: #8c8c96; }
+  table.lb td.score { text-align: right; font-variant-numeric: tabular-nums; color: #d81b1b; font-weight: 600; }
   canvas#game {
     display: block;
     background: #fff;
@@ -105,6 +186,50 @@
   </p>
 </noscript>
 <div id="stage"><canvas id="game" width="1200" height="760" aria-label="Mini Metro 简洁地铁模拟游戏画面"></canvas></div>
+
+<!-- 顶左用户徽章 -->
+<div id="user-badge">
+  <span class="who" id="who-label" hidden></span>
+  <button id="btn-login">登录 / 注册</button>
+  <button class="secondary" id="btn-leaderboard">排行榜</button>
+  <button class="secondary" id="btn-logout" hidden>退出</button>
+</div>
+
+<!-- 登录 / 注册 模态 -->
+<div class="modal" id="auth-modal" hidden>
+  <div class="card">
+    <span class="close" id="auth-close">×</span>
+    <h2 id="auth-title">登录</h2>
+    <div class="tabs">
+      <button id="tab-login"  class="active">登录</button>
+      <button id="tab-signup">注册</button>
+    </div>
+    <label>邮箱</label>
+    <input type="email" id="auth-email" autocomplete="email" placeholder="you@example.com">
+    <label>密码 (至少 6 位)</label>
+    <input type="password" id="auth-password" autocomplete="current-password" placeholder="••••••••">
+    <button class="primary" id="auth-submit">登录</button>
+    <div class="msg" id="auth-msg"></div>
+  </div>
+</div>
+
+<!-- 排行榜模态 -->
+<div class="modal" id="leaderboard-modal" hidden>
+  <div class="card">
+    <span class="close" id="lb-close">×</span>
+    <h2>排行榜 · 最高单局送达</h2>
+    <table class="lb">
+      <thead><tr><th>#</th><th>玩家</th><th style="text-align:right">送达</th></tr></thead>
+      <tbody id="lb-body"><tr><td colspan="3" style="color:#8c8c96">加载中…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Supabase JS SDK (UMD) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<!-- 项目级配置 (URL + anon key) -->
+<script src="config.js"></script>
+
 <script>
 "use strict";
 
@@ -314,10 +439,17 @@ class MetroGame {
     this.availableCarriages = INITIAL_CARRIAGES;
     this.availableStations = INITIAL_STATION_BUDGET;
 
+    // 待续局快照 (从云端或 localStorage 拿到的 current_game)
+    this._pendingResume = null;
+    this._homeContinueRect = null;
+    // 云端 push 防抖
+    this._cloudStatsTimer = null;
+    this._cloudSnapTimer = null;
+
     this._bindEvents();
   }
 
-  // ----- 持久化 -----
+  // ----- 持久化 (登录态用云端, 否则用 localStorage) -----
   _loadPersist(){
     try {
       const s = localStorage.getItem(STORAGE_KEY);
@@ -333,13 +465,111 @@ class MetroGame {
     }
   }
   _savePersist(){
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        coins: this.coins,
-        totalDeliveries: this.totalDeliveries,
-        coinCredited: this._coinCredited,
-      }));
-    } catch (e){}
+    if (Cloud.user()){
+      // 云端: 防抖 1.5s 后 push
+      clearTimeout(this._cloudStatsTimer);
+      this._cloudStatsTimer = setTimeout(()=>{
+        Cloud.pushStats({
+          coins: this.coins,
+          total_deliveries: this.totalDeliveries,
+          coin_credited: this._coinCredited,
+        }).catch(e=>console.warn("pushStats", e));
+      }, 1500);
+    } else {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          coins: this.coins,
+          totalDeliveries: this.totalDeliveries,
+          coinCredited: this._coinCredited,
+        }));
+      } catch (e){}
+    }
+  }
+
+  // ----- 一局快照 / 恢复 -----
+  snapshot(){
+    return {
+      v: 1,
+      mode: this.mode,
+      time: this.time,
+      score: this.score,
+      speedScale: this.speedScale,
+      stationGrantTimer: this.stationGrantTimer,
+      rewardTimer: this.rewardTimer,
+      rewardAlt: this.rewardAlt,
+      availableLines: this.availableLines,
+      availableCarriages: this.availableCarriages,
+      availableStations: this.availableStations,
+      zones: this.zones.map(z=>({x:z.x, y:z.y, kind:z.kind})),
+      stations: this.stations.map(s=>({
+        x:s.x, y:s.y, shape:s.shape,
+        passengers: s.passengers.slice(),
+        spawnTimer: s.spawnTimer, spawnInterval: s.spawnInterval, zoneKind: s.zoneKind,
+      })),
+      lines: this.lines.map(l=>({
+        color: l.color,
+        stations: l.stations.slice(),
+        trains: l.trains.map(t=>({
+          lineIdx: t.lineIdx, segIdx: t.segIdx, t: t.t, direction: t.direction,
+          passengers: t.passengers.slice(), carriages: t.carriages,
+        })),
+      })),
+      activeBoosts: this.activeBoosts.map(b=>({percent:b.percent, remaining:b.remaining})),
+      activeCarriageBuffs: this.activeCarriageBuffs.map(b=>({bonus:b.bonus, remaining:b.remaining})),
+    };
+  }
+  restoreSnapshot(snap){
+    if (!snap || snap.v !== 1) return false;
+    this.mode = snap.mode || "classic";
+    this.time = snap.time || 0;
+    this.score = snap.score || 0;
+    this.speedScale = snap.speedScale || 1.0;
+    this.stationGrantTimer = snap.stationGrantTimer || 0;
+    this.rewardTimer = snap.rewardTimer || 0;
+    this.rewardAlt = snap.rewardAlt || 0;
+    this.availableLines = snap.availableLines || 0;
+    this.availableCarriages = snap.availableCarriages || 0;
+    this.availableStations = snap.availableStations || 0;
+    this.zones = (snap.zones||[]).map(z=>newZone(z.x, z.y, z.kind));
+    this.stations = (snap.stations||[]).map(s=>{
+      const st = newStation(s.x, s.y, s.shape, {interval: s.spawnInterval, zoneKind: s.zoneKind});
+      st.passengers = (s.passengers||[]).slice();
+      st.spawnTimer = s.spawnTimer || 0;
+      return st;
+    });
+    this.lines = (snap.lines||[]).map(l=>{
+      const ln = newLine(l.color);
+      ln.stations = (l.stations||[]).slice();
+      ln.trains = (l.trains||[]).map(t=>{
+        const tr = newTrain(t.lineIdx||0);
+        tr.segIdx = t.segIdx||0; tr.t = t.t||0; tr.direction = t.direction||1;
+        tr.passengers = (t.passengers||[]).slice();
+        tr.carriages = t.carriages||0;
+        return tr;
+      });
+      return ln;
+    });
+    this.activeBoosts = (snap.activeBoosts||[]).map(b=>({percent:b.percent, remaining:b.remaining}));
+    this.activeCarriageBuffs = (snap.activeCarriageBuffs||[]).map(b=>({bonus:b.bonus, remaining:b.remaining}));
+    this.paused = false; this.gameOver = false;
+    this.drag = null; this.rightDrag = null;
+    return true;
+  }
+  _saveCurrentGameThrottled(){
+    if (!Cloud.user()) return;
+    clearTimeout(this._cloudSnapTimer);
+    this._cloudSnapTimer = setTimeout(()=>{
+      Cloud.pushSnapshot(this.snapshot()).catch(e=>console.warn("pushSnapshot", e));
+    }, 2000);
+  }
+  _saveCurrentGameNow(){
+    if (!Cloud.user()) return;
+    clearTimeout(this._cloudSnapTimer);
+    Cloud.pushSnapshot(this.snapshot()).catch(e=>console.warn("pushSnapshot", e));
+  }
+  _clearCurrentGameCloud(){
+    if (!Cloud.user()) return;
+    Cloud.clearSnapshot().catch(e=>console.warn("clearSnapshot", e));
   }
 
   // ----- 重置当前一局 (不动持久数据 & 活跃 buff) -----
@@ -499,6 +729,13 @@ class MetroGame {
     if (this.paused || this.gameOver) return;
     const rawDt = dt;
     this.realTime += rawDt;
+    // 周期快照: 每 30 真实秒上传一次当前一局到云端
+    this._snapshotAccum = (this._snapshotAccum || 0) + rawDt;
+    if (this._snapshotAccum >= 30){
+      this._snapshotAccum = 0;
+      this._saveCurrentGameThrottled();
+      if (Cloud.user()) Cloud.pushBestIfGreater(this.score).catch(()=>{});
+    }
     dt *= this.speedScale;
     this.time += dt;
     this.stationGrantTimer += dt;
@@ -679,7 +916,7 @@ class MetroGame {
     const k = e.key;
     if (k === "Escape"){
       if (this.shopOpen){ this.shopOpen=false; return; }
-      if (this.state === "play"){ this.state = "home"; return; }
+      if (this.state === "play"){ this._goHome(); return; }
       return;
     }
     if (this.state !== "play") return;
@@ -687,7 +924,18 @@ class MetroGame {
     else if (k.toLowerCase() === "r") this.reset();
     else if (k === "+" || k === "=") this.speedScale = Math.min(4, this.speedScale + 0.25);
     else if (k === "-" || k === "_") this.speedScale = Math.max(0.25, this.speedScale - 0.25);
-    else if (k.toLowerCase() === "h") this.state = "home";
+    else if (k.toLowerCase() === "h") this._goHome();
+  }
+
+  // 离开 play -> home: 把当前一局上传, 把它记为 pendingResume, 然后回首页
+  _goHome(){
+    if (this.stations.length){
+      const snap = this.snapshot();
+      this._pendingResume = snap;
+      this._saveCurrentGameNow();
+      if (Cloud.user()) Cloud.pushBestIfGreater(this.score).catch(()=>{});
+    }
+    this.state = "home";
   }
 
   _onMouseDown(button, x, y){
@@ -711,10 +959,22 @@ class MetroGame {
       if (this._homeShopBtnRect && pointInRect(x,y,this._homeShopBtnRect)){
         this.shopOpen = true; return;
       }
+      // "继续未完成的一局"
+      if (this._pendingResume && this._homeContinueRect
+          && pointInRect(x,y,this._homeContinueRect)){
+        if (this.restoreSnapshot(this._pendingResume)){
+          this._pendingResume = null;
+          this.state = "play";
+        }
+        return;
+      }
       for (const it of this._homeBirdRects){
         if (pointInRect(x,y,it.rect)){
           this.mode = it.mode;
           this.reset();
+          // 开新局 -> 清旧的 pendingResume 和云端 snapshot
+          this._pendingResume = null;
+          this._clearCurrentGameCloud();
           this.state = "play";
           return;
         }
@@ -1091,6 +1351,26 @@ class MetroGame {
     ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
     ctx.fillText("简洁地铁模拟  ·  选择模式", SCREEN_W/2, 232);
 
+    // 继续未完成的一局 (如果有 pendingResume)
+    this._homeContinueRect = null;
+    if (this._pendingResume){
+      const snap = this._pendingResume;
+      const lbl = `继续未完成的一局  ·  ${snap.mode==='normal'?'正常':'经典'}模式  ·  送达 ${snap.score|0}`;
+      ctx.font = "16px " + getComputedStyle(document.body).fontFamily;
+      const bw = ctx.measureText(lbl).width + 32;
+      const bh = 38;
+      const bx = (SCREEN_W - bw)/2, by = 275;
+      const rect = {x:bx, y:by, w:bw, h:bh};
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4;
+      roundRect(ctx, bx, by, bw, bh, 10);
+      ctx.fillStyle = "#2baa4c"; ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(lbl, bx + bw/2, by + bh/2);
+      this._homeContinueRect = rect;
+    }
+
     // 两只鸟
     this._homeBirdRects = [];
     const birdY = SCREEN_H/2 + 60;
@@ -1422,6 +1702,99 @@ function pointInRect(x,y,r){
 }
 
 // ===========================================================
+// 云端账户 + 存档 (Supabase)
+// ===========================================================
+const Cloud = (() => {
+  const URL = window.SUPABASE_URL, KEY = window.SUPABASE_ANON_KEY;
+  const lib = window.supabase;
+  const enabled = !!(URL && KEY && lib);
+  let client = null, currentUser = null;
+  let listeners = [];
+
+  if (enabled){
+    try { client = lib.createClient(URL, KEY, { auth:{ persistSession:true, autoRefreshToken:true } }); }
+    catch (e){ console.warn("Supabase init failed:", e); }
+  } else {
+    console.info("[Cloud] 未配置 Supabase, 走纯本地模式 (localStorage)。在 web/config.js 填入 SUPABASE_URL 和 ANON_KEY 后即可启用云端账户。");
+  }
+
+  async function init(){
+    if (!client) return null;
+    const { data } = await client.auth.getSession();
+    currentUser = data.session?.user || null;
+    client.auth.onAuthStateChange((_e, session)=>{
+      currentUser = session?.user || null;
+      listeners.forEach(fn => { try { fn(currentUser); } catch(e){ console.warn(e); }});
+    });
+    return currentUser;
+  }
+  function onAuthChange(fn){ listeners.push(fn); }
+  function user(){ return currentUser; }
+  function isEnabled(){ return enabled && !!client; }
+
+  async function signUp(email, password){
+    if (!client) throw new Error("未配置 Supabase");
+    const { data, error } = await client.auth.signUp({ email, password });
+    if (error) throw error;
+    return data;
+  }
+  async function signIn(email, password){
+    if (!client) throw new Error("未配置 Supabase");
+    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return data;
+  }
+  async function signOut(){ if (client) await client.auth.signOut(); }
+
+  async function fetchSave(){
+    if (!client || !currentUser) return null;
+    const { data, error } = await client.from("user_save")
+      .select("coins,total_deliveries,coin_credited,best_score,current_game")
+      .eq("user_id", currentUser.id).maybeSingle();
+    if (error){ console.warn("fetchSave", error); return null; }
+    return data;
+  }
+  async function pushStats(stats){
+    if (!client || !currentUser) return;
+    await client.from("user_save")
+      .upsert({ user_id: currentUser.id, ...stats });
+  }
+  async function pushBestIfGreater(score){
+    if (!client || !currentUser) return;
+    const { data: cur } = await client.from("user_save")
+      .select("best_score").eq("user_id", currentUser.id).maybeSingle();
+    if (!cur || score > (cur.best_score|0)){
+      await client.from("user_save").update({
+        best_score: score,
+        best_score_at: new Date().toISOString(),
+      }).eq("user_id", currentUser.id);
+    }
+  }
+  async function pushSnapshot(snap){
+    if (!client || !currentUser) return;
+    await client.from("user_save").update({ current_game: snap })
+      .eq("user_id", currentUser.id);
+  }
+  async function clearSnapshot(){
+    if (!client || !currentUser) return;
+    await client.from("user_save").update({ current_game: null })
+      .eq("user_id", currentUser.id);
+  }
+  async function fetchLeaderboard(limit=50){
+    if (!client) return [];
+    const { data, error } = await client.rpc("get_leaderboard", { limit_n: limit });
+    if (error){ console.warn("leaderboard", error); return []; }
+    return data || [];
+  }
+  return {
+    init, onAuthChange, user, isEnabled,
+    signUp, signIn, signOut,
+    fetchSave, pushStats, pushBestIfGreater, pushSnapshot, clearSnapshot,
+    fetchLeaderboard,
+  };
+})();
+
+// ===========================================================
 // 启动
 // ===========================================================
 const canvas = document.getElementById("game");
@@ -1448,6 +1821,167 @@ function loop(now){
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// ===========================================================
+// Auth / Leaderboard UI 绑定
+// ===========================================================
+const $ = id => document.getElementById(id);
+
+function refreshAuthUI(){
+  const u = Cloud.user();
+  const who = $("who-label"), btnLogin = $("btn-login"), btnLogout = $("btn-logout");
+  if (!Cloud.isEnabled()){
+    who.hidden = false;
+    who.textContent = "本地存档 (未配置云端)";
+    btnLogin.hidden = true;
+    btnLogout.hidden = true;
+    return;
+  }
+  if (u){
+    const name = (u.email || "").split("@")[0] || "玩家";
+    who.hidden = false;
+    who.textContent = `${name} (云端已同步)`;
+    btnLogin.hidden = true;
+    btnLogout.hidden = false;
+  } else {
+    who.hidden = true;
+    btnLogin.hidden = false;
+    btnLogout.hidden = true;
+  }
+}
+
+async function applyCloudSave(){
+  if (!Cloud.user()) return;
+  const save = await Cloud.fetchSave();
+  if (!save) return;
+  // 合并 (取较大值), 避免登录瞬间丢掉本地累计
+  game.coins             = Math.max(game.coins,            save.coins             | 0);
+  game.totalDeliveries   = Math.max(game.totalDeliveries,  save.total_deliveries  | 0);
+  game._coinCredited     = Math.max(game._coinCredited,    save.coin_credited     | 0);
+  game._pendingResume    = save.current_game || null;
+  // 把合并后值推回云端
+  try {
+    await Cloud.pushStats({
+      coins: game.coins,
+      total_deliveries: game.totalDeliveries,
+      coin_credited: game._coinCredited,
+    });
+  } catch (e){ console.warn("merged pushStats", e); }
+}
+
+(async ()=>{
+  try {
+    await Cloud.init();
+    await applyCloudSave();
+  } catch (e){ console.warn("Cloud.init", e); }
+  refreshAuthUI();
+})();
+Cloud.onAuthChange(async (u)=>{
+  if (u){
+    await applyCloudSave();
+  } else {
+    // 退出后, 重新从 localStorage 取
+    const local = game._loadPersist();
+    game.coins = local.coins;
+    game.totalDeliveries = local.totalDeliveries;
+    game._coinCredited = local.coinCredited;
+    game._pendingResume = null;
+  }
+  refreshAuthUI();
+});
+
+// 顶部按钮
+let authMode = "login";
+function showAuth(mode){
+  authMode = mode;
+  $("tab-login").classList.toggle("active",  mode === "login");
+  $("tab-signup").classList.toggle("active", mode === "signup");
+  $("auth-title").textContent = mode === "login" ? "登录" : "注册";
+  $("auth-submit").textContent = mode === "login" ? "登录" : "注册";
+  $("auth-msg").textContent = ""; $("auth-msg").className = "msg";
+  $("auth-modal").hidden = false;
+}
+function hideAuth(){ $("auth-modal").hidden = true; }
+
+$("btn-login").addEventListener("click", ()=>{
+  if (!Cloud.isEnabled()){
+    alert("当前页面没有配置 Supabase, 请在 web/config.js 填入 SUPABASE_URL 和 SUPABASE_ANON_KEY 后刷新, 才能登录注册和云端存档。");
+    return;
+  }
+  showAuth("login");
+});
+$("btn-logout").addEventListener("click", async ()=>{
+  await Cloud.signOut();
+});
+$("auth-close").addEventListener("click", hideAuth);
+$("tab-login").addEventListener("click", ()=>showAuth("login"));
+$("tab-signup").addEventListener("click", ()=>showAuth("signup"));
+$("auth-submit").addEventListener("click", async ()=>{
+  const email = $("auth-email").value.trim();
+  const password = $("auth-password").value;
+  const msg = $("auth-msg");
+  if (!email || !password){ msg.textContent = "邮箱和密码都要填"; msg.className = "msg err"; return; }
+  if (password.length < 6){ msg.textContent = "密码至少 6 位"; msg.className = "msg err"; return; }
+  $("auth-submit").disabled = true;
+  try {
+    if (authMode === "signup"){
+      await Cloud.signUp(email, password);
+      msg.textContent = "注册成功! 如果开启了邮箱验证, 请去邮箱激活后再登录。"; msg.className = "msg ok";
+    } else {
+      await Cloud.signIn(email, password);
+      msg.textContent = "登录成功"; msg.className = "msg ok";
+      setTimeout(hideAuth, 600);
+    }
+  } catch (e){
+    msg.textContent = e.message || String(e); msg.className = "msg err";
+  } finally {
+    $("auth-submit").disabled = false;
+  }
+});
+// 回车提交
+$("auth-password").addEventListener("keydown", e=>{ if (e.key==="Enter") $("auth-submit").click(); });
+
+// 排行榜
+$("btn-leaderboard").addEventListener("click", async ()=>{
+  if (!Cloud.isEnabled()){
+    alert("未配置 Supabase, 无云端排行榜。请先在 web/config.js 填配置。");
+    return;
+  }
+  $("leaderboard-modal").hidden = false;
+  $("lb-body").innerHTML = '<tr><td colspan="3" style="color:#8c8c96">加载中…</td></tr>';
+  const rows = await Cloud.fetchLeaderboard(50);
+  const me = Cloud.user();
+  const myName = me ? (me.email || "").split("@")[0] : "";
+  if (!rows.length){
+    $("lb-body").innerHTML = '<tr><td colspan="3" style="color:#8c8c96">还没有人上榜, 快去玩出个高分吧!</td></tr>';
+    return;
+  }
+  $("lb-body").innerHTML = rows.map((r,i)=>{
+    const isMe = r.display_name === myName;
+    return `<tr class="${isMe?'me':''}"><td class="rank">${i+1}</td><td>${r.display_name}</td><td class="score">${r.best_score}</td></tr>`;
+  }).join("");
+});
+$("lb-close").addEventListener("click", ()=>{ $("leaderboard-modal").hidden = true; });
+
+// 关掉模态: 点击 backdrop
+$("auth-modal").addEventListener("click", e=>{ if (e.target.id==="auth-modal") hideAuth(); });
+$("leaderboard-modal").addEventListener("click", e=>{ if (e.target.id==="leaderboard-modal") $("leaderboard-modal").hidden = true; });
+
+// 离开页面前最后保存一次
+window.addEventListener("beforeunload", ()=>{
+  if (game.state === "play" && game.stations.length){
+    game._pendingResume = game.snapshot();
+    game._saveCurrentGameNow();
+  }
+  if (Cloud.user()){
+    Cloud.pushStats({
+      coins: game.coins,
+      total_deliveries: game.totalDeliveries,
+      coin_credited: game._coinCredited,
+    }).catch(()=>{});
+    Cloud.pushBestIfGreater(game.score).catch(()=>{});
+  }
+});
 </script>
 </body>
 </html>
