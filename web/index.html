@@ -225,9 +225,7 @@
   </div>
 </div>
 
-<!-- Supabase JS SDK (UMD) -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<!-- 项目级配置 (URL + anon key) -->
+<!-- 项目级配置 (PHP 后端地址) -->
 <script src="config.js"></script>
 
 <script>
@@ -1702,90 +1700,121 @@ function pointInRect(x,y,r){
 }
 
 // ===========================================================
-// 云端账户 + 存档 (Supabase)
+// 云端账户 + 存档 (自托管 PHP + MySQL 后端)
 // ===========================================================
 const Cloud = (() => {
-  const URL = window.SUPABASE_URL, KEY = window.SUPABASE_ANON_KEY;
-  const lib = window.supabase;
-  const enabled = !!(URL && KEY && lib);
-  let client = null, currentUser = null;
+  let BASE = (window.METRO_BACKEND_URL || "").replace(/\/+$/, "");
+  const enabled = !!BASE;
+  const TOKEN_KEY = "metro_token";
+  let currentUser = null;
   let listeners = [];
 
-  if (enabled){
-    try { client = lib.createClient(URL, KEY, { auth:{ persistSession:true, autoRefreshToken:true } }); }
-    catch (e){ console.warn("Supabase init failed:", e); }
-  } else {
-    console.info("[Cloud] 未配置 Supabase, 走纯本地模式 (localStorage)。在 web/config.js 填入 SUPABASE_URL 和 ANON_KEY 后即可启用云端账户。");
+  if (!enabled){
+    console.info("[Cloud] 未配置后端, 走纯本地模式 (localStorage)。在 web/config.js 填入 window.METRO_BACKEND_URL 后即可启用云端账户。");
+  }
+
+  function getToken(){ try { return localStorage.getItem(TOKEN_KEY); } catch (e){ return null; } }
+  function setToken(t){ try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e){} }
+
+  async function api(path, { method="GET", body=null, auth=true } = {}){
+    if (!BASE) throw new Error("后端未配置");
+    const headers = { "Accept": "application/json" };
+    if (body) headers["Content-Type"] = "application/json";
+    if (auth){
+      const t = getToken();
+      if (t) headers["Authorization"] = "Bearer " + t;
+    }
+    let res;
+    try {
+      res = await fetch(BASE + path, {
+        method, headers,
+        body: body ? JSON.stringify(body) : undefined,
+        credentials: "omit",
+      });
+    } catch (e){
+      throw new Error("网络无法连接到后端 (CORS / 域名 / HTTPS): " + e.message);
+    }
+    let data = null;
+    try { data = await res.json(); } catch (e){}
+    if (!res.ok){
+      const msg = (data && data.error) || ("HTTP " + res.status);
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
   }
 
   async function init(){
-    if (!client) return null;
-    const { data } = await client.auth.getSession();
-    currentUser = data.session?.user || null;
-    client.auth.onAuthStateChange((_e, session)=>{
-      currentUser = session?.user || null;
-      listeners.forEach(fn => { try { fn(currentUser); } catch(e){ console.warn(e); }});
-    });
+    if (!enabled) return null;
+    if (!getToken()){ currentUser = null; return null; }
+    try {
+      const r = await api("/auth.php?action=me");
+      currentUser = r && r.user ? r.user : null;
+      if (!currentUser) setToken(null);
+    } catch (e){
+      if (e.status === 401) setToken(null);
+      currentUser = null;
+    }
     return currentUser;
   }
+  function fire(){ listeners.forEach(fn => { try { fn(currentUser); } catch (e){ console.warn(e); }}); }
   function onAuthChange(fn){ listeners.push(fn); }
   function user(){ return currentUser; }
-  function isEnabled(){ return enabled && !!client; }
+  function isEnabled(){ return enabled; }
 
   async function signUp(email, password){
-    if (!client) throw new Error("未配置 Supabase");
-    const { data, error } = await client.auth.signUp({ email, password });
-    if (error) throw error;
-    return data;
+    const r = await api("/auth.php?action=signup", { method:"POST", body:{ email, password }, auth:false });
+    setToken(r.token);
+    currentUser = r.user;
+    fire();
+    return r;
   }
   async function signIn(email, password){
-    if (!client) throw new Error("未配置 Supabase");
-    const { data, error } = await client.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    return data;
+    const r = await api("/auth.php?action=login", { method:"POST", body:{ email, password }, auth:false });
+    setToken(r.token);
+    currentUser = r.user;
+    fire();
+    return r;
   }
-  async function signOut(){ if (client) await client.auth.signOut(); }
+  async function signOut(){
+    try { await api("/auth.php?action=logout", { method:"POST" }); } catch (e){}
+    setToken(null);
+    currentUser = null;
+    fire();
+  }
 
   async function fetchSave(){
-    if (!client || !currentUser) return null;
-    const { data, error } = await client.from("user_save")
-      .select("coins,total_deliveries,coin_credited,best_score,current_game")
-      .eq("user_id", currentUser.id).maybeSingle();
-    if (error){ console.warn("fetchSave", error); return null; }
-    return data;
+    if (!currentUser) return null;
+    try { return await api("/save.php"); }
+    catch (e){ console.warn("fetchSave", e); return null; }
   }
   async function pushStats(stats){
-    if (!client || !currentUser) return;
-    await client.from("user_save")
-      .upsert({ user_id: currentUser.id, ...stats });
+    if (!currentUser) return;
+    try { await api("/save.php?type=stats", { method:"POST", body:stats }); }
+    catch (e){ console.warn("pushStats", e); }
   }
   async function pushBestIfGreater(score){
-    if (!client || !currentUser) return;
-    const { data: cur } = await client.from("user_save")
-      .select("best_score").eq("user_id", currentUser.id).maybeSingle();
-    if (!cur || score > (cur.best_score|0)){
-      await client.from("user_save").update({
-        best_score: score,
-        best_score_at: new Date().toISOString(),
-      }).eq("user_id", currentUser.id);
-    }
+    if (!currentUser) return;
+    try { await api("/save.php?type=best", { method:"POST", body:{ score } }); }
+    catch (e){ console.warn("pushBest", e); }
   }
   async function pushSnapshot(snap){
-    if (!client || !currentUser) return;
-    await client.from("user_save").update({ current_game: snap })
-      .eq("user_id", currentUser.id);
+    if (!currentUser) return;
+    try { await api("/save.php?type=snapshot", { method:"POST", body:{ snapshot: snap } }); }
+    catch (e){ console.warn("pushSnapshot", e); }
   }
   async function clearSnapshot(){
-    if (!client || !currentUser) return;
-    await client.from("user_save").update({ current_game: null })
-      .eq("user_id", currentUser.id);
+    if (!currentUser) return;
+    try { await api("/save.php?type=snapshot", { method:"DELETE" }); }
+    catch (e){ console.warn("clearSnapshot", e); }
   }
   async function fetchLeaderboard(limit=50){
-    if (!client) return [];
-    const { data, error } = await client.rpc("get_leaderboard", { limit_n: limit });
-    if (error){ console.warn("leaderboard", error); return []; }
-    return data || [];
+    if (!enabled) return [];
+    try { return await api("/leaderboard.php?limit=" + limit, { auth:false }); }
+    catch (e){ console.warn("leaderboard", e); return []; }
   }
+
   return {
     init, onAuthChange, user, isEnabled,
     signUp, signIn, signOut,
@@ -1911,12 +1940,13 @@ $("btn-login").addEventListener("click", ()=>{
   if (!Cloud.isEnabled()){
     alert(
       "尚未启用云端账户。\n\n" +
-      "步骤 (一次性, 约 5 分钟):\n" +
-      "1) 到 https://app.supabase.com/ 注册并新建一个项目 (免费档)\n" +
-      "2) 项目里 SQL Editor 跑一遍仓库根目录 supabase-setup.sql\n" +
-      "3) Project Settings -> API 复制 Project URL 和 anon key\n" +
-      "4) 把两条填到 web/config.js 里, 然后 git push 重新部署\n\n" +
-      "完成后刷新此页面, 这个按钮会变成 '登录 / 注册'。"
+      "步骤 (一次性):\n" +
+      "1) 宝塔新建一个站点 (推荐绑域名 + 开 SSL)\n" +
+      "2) 上传仓库 backend/ 里 4 个 PHP 文件到站点目录\n" +
+      "3) 宝塔新建 MySQL 库, 导入 backend/schema.sql\n" +
+      "4) 编辑 db.php 填入库名/用户/密码; 检查 CORS_ALLOWED_ORIGINS 含本站域名\n" +
+      "5) 在 web/config.js 把 window.METRO_BACKEND_URL 设为后端 URL 前缀, 然后 git push\n\n" +
+      "详细步骤见仓库 backend/README.md。"
     );
     return;
   }

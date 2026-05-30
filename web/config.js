@@ -1,6 +1,9 @@
 // ==============================================================
-// Supabase 项目配置 — 在这里填你的两条信息后保存即可
-// 从 https://app.supabase.com/  ->  你的项目  ->  Project Settings  ->  API
+// 后端地址 — 指向你宝塔服务器上 backend/ 那几个 PHP 文件的 URL 前缀
+// 例:
+//   window.METRO_BACKEND_URL = "https://api.your-domain.com";
+//   (那么 auth.php 的完整 URL 就是  https://api.your-domain.com/auth.php )
+//
+// 留空 -> 走纯本地模式 (localStorage 单设备保存, 无账户无云端)
 // ==============================================================
-window.SUPABASE_URL      = "";   // 形如 https://abcxyz.supabase.co
-window.SUPABASE_ANON_KEY = "";   // 长字符串, 以 "eyJ" 开头. anon key 设计上就是公开可见的, 安全靠 RLS
+window.METRO_BACKEND_URL = "";
