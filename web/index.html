@@ -1831,9 +1831,11 @@ function refreshAuthUI(){
   const u = Cloud.user();
   const who = $("who-label"), btnLogin = $("btn-login"), btnLogout = $("btn-logout");
   if (!Cloud.isEnabled()){
+    // 没配置 Supabase: 仍然显示按钮, 点击给出设置指引, 而不是直接藏起来
     who.hidden = false;
-    who.textContent = "本地存档 (未配置云端)";
-    btnLogin.hidden = true;
+    who.textContent = "本地存档";
+    btnLogin.hidden = false;
+    btnLogin.textContent = "启用云端账户…";
     btnLogout.hidden = true;
     return;
   }
@@ -1842,10 +1844,12 @@ function refreshAuthUI(){
     who.hidden = false;
     who.textContent = `${name} (云端已同步)`;
     btnLogin.hidden = true;
+    btnLogin.textContent = "登录 / 注册";
     btnLogout.hidden = false;
   } else {
     who.hidden = true;
     btnLogin.hidden = false;
+    btnLogin.textContent = "登录 / 注册";
     btnLogout.hidden = true;
   }
 }
@@ -1905,7 +1909,15 @@ function hideAuth(){ $("auth-modal").hidden = true; }
 
 $("btn-login").addEventListener("click", ()=>{
   if (!Cloud.isEnabled()){
-    alert("当前页面没有配置 Supabase, 请在 web/config.js 填入 SUPABASE_URL 和 SUPABASE_ANON_KEY 后刷新, 才能登录注册和云端存档。");
+    alert(
+      "尚未启用云端账户。\n\n" +
+      "步骤 (一次性, 约 5 分钟):\n" +
+      "1) 到 https://app.supabase.com/ 注册并新建一个项目 (免费档)\n" +
+      "2) 项目里 SQL Editor 跑一遍仓库根目录 supabase-setup.sql\n" +
+      "3) Project Settings -> API 复制 Project URL 和 anon key\n" +
+      "4) 把两条填到 web/config.js 里, 然后 git push 重新部署\n\n" +
+      "完成后刷新此页面, 这个按钮会变成 '登录 / 注册'。"
+    );
     return;
   }
   showAuth("login");
