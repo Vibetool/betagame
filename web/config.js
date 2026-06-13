@@ -6,4 +6,4 @@
 //
 // 留空 -> 走纯本地模式 (localStorage 单设备保存, 无账户无云端)
 // ==============================================================
-window.METRO_BACKEND_URL = "";
+window.METRO_BACKEND_URL = "https://api.ovobot.ai";
