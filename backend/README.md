@@ -44,17 +44,49 @@ const CORS_ALLOWED_ORIGINS = [
 ### 5) 申请 SSL (必须)
 GitHub Pages 是 HTTPS,浏览器**禁止**从 HTTPS 页面 fetch 到 HTTP 后端 (mixed content)。
 
-宝塔 -> 站点 -> 设置 -> SSL -> **Let's Encrypt**,域名打勾,申请 -> 强制 HTTPS。
+**申请前先做完这 3 项**, 否则 Let's Encrypt 会反复"验证失败":
+1. 云厂商安全组 (阿里云/腾讯云/华为云控制台)放行 **80 + 443** 入站
+2. 宝塔 -> 安全 -> 放行 **80 + 443**
+3. DNS A 记录已生效 — 命令行 `ping api.your-domain.com` 应该返回你的服务器 IP。第一次 DNS 生效一般 5~30 分钟
+
+确认后:宝塔 -> 站点 -> 设置 -> SSL -> **Let's Encrypt**,域名打勾,申请 -> 强制 HTTPS。
+
+> **注意**: 拿到证书后 80 端口**也不能关**!Let's Encrypt 每 60 天自动续签也走 80,关了下次续签必失败。
 
 > 没有域名? 自签证书或 IP+http 都不行 — 浏览器会拒绝。最便宜的国内域名 1 块/年,namesilo 国外域名约 60 块/年。或者直接把游戏 HTML 也搬到自己服务器,前后端同域,就不用 CORS 也不用 HTTPS 强制了。
 
 ### 6) 自检
-浏览器打开 `https://api.your-domain.com/leaderboard.php` -> 应返回 `[]`。
-打开 `https://api.your-domain.com/auth.php?action=me` -> 应返回 `{"user":null}`。
+**先打** `https://api.your-domain.com/health.php` 这个一站式自检端点, 浏览器或 curl 都行。响应里:
+- `"ok": true` + `"db": "connected"` + `"tables": "ok"` -> 后端基础设施全通
+- `"db": "error: ..."` -> 看到具体 PDO 错误, 改 db.php 里的 DB 配置
+- `"tables": {"missing": [...]}` -> schema.sql 没跑完, 回第 2 步重新导入
+- `"origin"` 字段 -> 应该是 `null` (curl) 或你的前端域名 (浏览器). 如果是其他, 改 `CORS_ALLOWED_ORIGINS` 加白名单
+
+确认 health.php OK 后再打:
+- `https://api.your-domain.com/leaderboard.php` -> 应返回 `[]`
+- `https://api.your-domain.com/auth.php?action=me` -> 应返回 `{"user":null}`
+
+测 Authorization 头传透 (Nginx + PHP-FPM 经典坑):
+```bash
+curl -H "Authorization: Bearer abcd1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcd" \
+     https://api.your-domain.com/health.php
+```
+响应里 `"auth_header": "received (token abcd12…)"` 说明 Nginx 把头传给 PHP 了, OK。
+如果是 `"no Bearer token in request ..."` -> Nginx 把头吃了, 改宝塔站点配置文件加:
+```nginx
+fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+```
 
 如果 500 -> 检查宝塔的 PHP 错误日志 (站点 -> 日志,或者 `/www/wwwlogs/`)。最常见原因:
-- `db.php` 里 DB 密码不对
+- `db.php` 里 DB 密码不对 (或还是 `'CHANGE_ME'`)
 - PHP 没装 `pdo_mysql` 扩展 (宝塔 -> 软件商店 -> PHP 8.x -> 设置 -> 扩展,勾上 pdo_mysql)
+- Nginx 没传 `Authorization` 头给 PHP-FPM。db.php 已经做了 `REDIRECT_HTTP_AUTHORIZATION` + `apache_request_headers` 双兜底,正常宝塔默认 Nginx 站不会出问题;如果 `/auth.php?action=me` 带 token 还是返回 `{"user":null}`,在宝塔站点 -> 配置文件加一行:
+  ```nginx
+  fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+  ```
+- MySQL 时区跟 PHP 不一致导致 token 立刻过期 — 进 phpMyAdmin 执行 `SELECT NOW();` 跟服务器系统时间比对,差超过 1 小时就在 my.cnf 或宝塔 -> MySQL 改 `default-time-zone = '+08:00'`
+
+如果浏览器报 CORS error 而 curl 直连后端却正常:确认 `db.php` 顶部 `CORS_ALLOWED_ORIGINS` 数组里有你前端的**确切域名**(协议+域+端口,结尾不带 `/`)。
 
 ### 7) 配置前端
 编辑仓库里 `web/config.js`:

@@ -34,3 +34,12 @@ CREATE TABLE IF NOT EXISTS user_save (
   CONSTRAINT fk_user_save_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_user_save_best (best_score)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 注册时自动建好对应的 user_save 行 (跟早期 Supabase trigger 等价)
+-- 避免 user 已 INSERT 但 user_save 还没建出来的窗口
+-- (单语句 trigger body, 不需要 DELIMITER, 各种导入工具都兼容)
+DROP TRIGGER IF EXISTS trg_users_create_save;
+CREATE TRIGGER trg_users_create_save
+  AFTER INSERT ON users
+  FOR EACH ROW
+  INSERT IGNORE INTO user_save (user_id) VALUES (NEW.id);

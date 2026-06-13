@@ -10,6 +10,9 @@ require __DIR__ . '/db.php';
 send_cors();
 
 $u = require_user($db);
+// 兜底: 万一 user_save 行因为某种原因不存在 (历史数据迁移 / 早期 schema), 自补一行
+// 否则后续 UPDATE 都会 affected_rows=0 静默无效, 用户以为存档成功但其实丢了
+ensure_save_row($db, (int)$u['id']);
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $type   = $_GET['type'] ?? 'stats';
 

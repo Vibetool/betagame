@@ -566,6 +566,15 @@ class MetroGame {
     }
   }
   _savePersist(){
+    // 不管登入与否都同步写 localStorage 一份, 否则登出瞬间会回退到老快照
+    // (登入态下 cloud 是权威, 但下次 _loadPersist 至少能读到当前最新值, 防止 race)
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        coins: this.coins,
+        totalDeliveries: this.totalDeliveries,
+        coinCredited: this._coinCredited,
+      }));
+    } catch (e){}
     if (Cloud.user()){
       // 云端: 防抖 1.5s 后 push
       clearTimeout(this._cloudStatsTimer);
@@ -576,14 +585,6 @@ class MetroGame {
           coin_credited: this._coinCredited,
         }).catch(e=>console.warn("pushStats", e));
       }, 1500);
-    } else {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
-          coins: this.coins,
-          totalDeliveries: this.totalDeliveries,
-          coinCredited: this._coinCredited,
-        }));
-      } catch (e){}
     }
   }
 
@@ -1965,7 +1966,7 @@ const Cloud = (() => {
   function getToken(){ try { return localStorage.getItem(TOKEN_KEY); } catch (e){ return null; } }
   function setToken(t){ try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e){} }
 
-  async function api(path, { method="GET", body=null, auth=true } = {}){
+  async function api(path, { method="GET", body=null, auth=true, keepalive=false } = {}){
     if (!BASE) throw new Error("后端未配置");
     const headers = { "Accept": "application/json" };
     if (body) headers["Content-Type"] = "application/json";
@@ -1979,6 +1980,7 @@ const Cloud = (() => {
         method, headers,
         body: body ? JSON.stringify(body) : undefined,
         credentials: "omit",
+        keepalive,   // beforeunload 时让请求活到关页后, 避免最后一次存档丢失
       });
     } catch (e){
       throw new Error("网络无法连接到后端 (CORS / 域名 / HTTPS): " + e.message);
@@ -2038,19 +2040,19 @@ const Cloud = (() => {
     try { return await api("/save.php"); }
     catch (e){ console.warn("fetchSave", e); return null; }
   }
-  async function pushStats(stats){
+  async function pushStats(stats, { keepalive=false } = {}){
     if (!currentUser) return;
-    try { await api("/save.php?type=stats", { method:"POST", body:stats }); }
+    try { await api("/save.php?type=stats", { method:"POST", body:stats, keepalive }); }
     catch (e){ console.warn("pushStats", e); }
   }
-  async function pushBestIfGreater(score){
+  async function pushBestIfGreater(score, { keepalive=false } = {}){
     if (!currentUser) return;
-    try { await api("/save.php?type=best", { method:"POST", body:{ score } }); }
+    try { await api("/save.php?type=best", { method:"POST", body:{ score }, keepalive }); }
     catch (e){ console.warn("pushBest", e); }
   }
-  async function pushSnapshot(snap){
+  async function pushSnapshot(snap, { keepalive=false } = {}){
     if (!currentUser) return;
-    try { await api("/save.php?type=snapshot", { method:"POST", body:{ snapshot: snap } }); }
+    try { await api("/save.php?type=snapshot", { method:"POST", body:{ snapshot: snap }, keepalive }); }
     catch (e){ console.warn("pushSnapshot", e); }
   }
   async function clearSnapshot(){
@@ -2109,7 +2111,7 @@ function refreshAuthUI(){
   const u = Cloud.user();
   const who = $("who-label"), btnLogin = $("btn-login"), btnLogout = $("btn-logout");
   if (!Cloud.isEnabled()){
-    // 没配置 Supabase: 仍然显示按钮, 点击给出设置指引, 而不是直接藏起来
+    // 没配置后端: 仍然显示按钮, 点击给出设置指引, 而不是直接藏起来
     who.hidden = false;
     who.textContent = "本地存档";
     btnLogin.hidden = false;
@@ -2217,7 +2219,8 @@ $("auth-submit").addEventListener("click", async ()=>{
   try {
     if (authMode === "signup"){
       await Cloud.signUp(email, password);
-      msg.textContent = "注册成功! 如果开启了邮箱验证, 请去邮箱激活后再登录。"; msg.className = "msg ok";
+      msg.textContent = "注册成功, 已自动登录"; msg.className = "msg ok";
+      setTimeout(hideAuth, 600);
     } else {
       await Cloud.signIn(email, password);
       msg.textContent = "登录成功"; msg.className = "msg ok";
@@ -2235,14 +2238,15 @@ $("auth-password").addEventListener("keydown", e=>{ if (e.key==="Enter") $("auth
 // 排行榜
 $("btn-leaderboard").addEventListener("click", async ()=>{
   if (!Cloud.isEnabled()){
-    alert("未配置 Supabase, 无云端排行榜。请先在 web/config.js 填配置。");
+    alert("未配置后端, 无云端排行榜。请先在 web/config.js 填 window.METRO_BACKEND_URL。");
     return;
   }
   $("leaderboard-modal").hidden = false;
   $("lb-body").innerHTML = '<tr><td colspan="3" style="color:#8c8c96">加载中…</td></tr>';
   const rows = await Cloud.fetchLeaderboard(50);
   const me = Cloud.user();
-  const myName = me ? (me.email || "").split("@")[0] : "";
+  // 用服务端返回的 display_name 而不是从 email 推导, 兼容 32 字符截断
+  const myName = me ? (me.display_name || (me.email || "").split("@")[0]) : "";
   if (!rows.length){
     $("lb-body").innerHTML = '<tr><td colspan="3" style="color:#8c8c96">还没有人上榜, 快去玩出个高分吧!</td></tr>';
     return;
@@ -2336,17 +2340,26 @@ $("leaderboard-modal").addEventListener("click", e=>{ if (e.target.id==="leaderb
 
 // 离开页面前最后保存一次
 window.addEventListener("beforeunload", ()=>{
-  if (game.state === "play" && game.stations.length){
-    game._pendingResume = game.snapshot();
-    game._saveCurrentGameNow();
-  }
   if (Cloud.user()){
+    // 关页时 keepalive:true 让浏览器把这几条 POST 也送出去, 不被 unload 打断
     Cloud.pushStats({
       coins: game.coins,
       total_deliveries: game.totalDeliveries,
       coin_credited: game._coinCredited,
-    }).catch(()=>{});
-    Cloud.pushBestIfGreater(game.score).catch(()=>{});
+    }, { keepalive: true });
+    Cloud.pushBestIfGreater(game.score, { keepalive: true });
+    if (game.state === "play" && game.stations.length
+        && game.mode !== "mystery" && game.mode !== "excavation"){
+      Cloud.pushSnapshot(game.snapshot(), { keepalive: true });
+    }
+  } else if (game.state === "play" && game.stations.length){
+    // 离线模式: localStorage 已经同步写过了, 这里再补一次防止极端 race
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        coins: game.coins, totalDeliveries: game.totalDeliveries,
+        coinCredited: game._coinCredited,
+      }));
+    } catch (e){}
   }
 });
 </script>
