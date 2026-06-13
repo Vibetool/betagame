@@ -304,9 +304,8 @@ const HIGH_SPAWN = 6.0;
 const LOW_SPAWN = 10.0;
 const LINE_CLICK_RADIUS = 14;   // 左键点击距线段 <= 该距离视为点中线路
 // 挖掘模式
-const EXCAVATION_TIME_LIMIT = 180;            // 180 秒 = 3 分钟
 const EXCAVATION_LINE_FULL_COST = 80;         // 跨满屏高度的线需 80 送达
-const EXCAVATION_MAX_EXTENSIONS = 3;          // 最多 +1 分钟 3 次
+const EXCAVATION_INITIAL_SCORE = 30;          // 开局送 30 送达 (足够建几条短线起步)
 
 const COIN_PER_DELIVERIES = 100;
 const SHOP_ITEMS = [
@@ -479,10 +478,7 @@ class MetroGame {
     this.mysteryDeliveries = 0;
     this.mysteryTimeLeft = 0;
     this.mysteryWon = false;
-    // 挖掘模式: 时限 (秒) + 已用 +1 分钟次数
-    this.excavationTimeLeft = 0;
-    this.excavationExtensions = 0;
-    this._huExtRect = null;          // +1 分钟按钮的命中区
+    // 挖掘模式
     this._homeExcavateBtnRect = null;
     // 云端 push 防抖
     this._cloudStatsTimer = null;
@@ -637,9 +633,8 @@ class MetroGame {
     this.mysteryDeliveries = 0;
     this.mysteryWon = false;
     this.mysteryTimeLeft = this.mysteryConfig ? this.mysteryConfig.timeLimit : 0;
-    // 挖掘模式局内字段
-    this.excavationExtensions = 0;
-    this.excavationTimeLeft = (this.mode === "excavation") ? EXCAVATION_TIME_LIMIT : 0;
+    // 挖掘模式开局送 30 送达 (可用来立即建几条短线)
+    if (this.mode === "excavation") this.score = EXCAVATION_INITIAL_SCORE;
 
     this._generateZones();
     // 每个区中心一个起始站
@@ -794,14 +789,6 @@ class MetroGame {
     if (this.mode === "mystery" && this.mysteryConfig && !this.mysteryWon){
       this.mysteryTimeLeft = Math.max(0, this.mysteryTimeLeft - rawDt);
       if (this.mysteryTimeLeft <= 0 && this.mysteryDeliveries < this.mysteryConfig.target){
-        this.gameOver = true;
-        this._clearCurrentGameCloud();
-      }
-    }
-    // 挖掘模式倒计时
-    if (this.mode === "excavation"){
-      this.excavationTimeLeft = Math.max(0, this.excavationTimeLeft - rawDt);
-      if (this.excavationTimeLeft <= 0){
         this.gameOver = true;
         this._clearCurrentGameCloud();
       }
@@ -1127,18 +1114,6 @@ class MetroGame {
   }
 
   _onLeftDown(x,y){
-    // 挖掘模式 +1 分钟按钮
-    if (this._huExtRect && pointInRect(x, y, this._huExtRect)){
-      if (this.mode === "excavation"
-          && this.excavationExtensions < EXCAVATION_MAX_EXTENSIONS
-          && this.coins >= 1){
-        this.coins -= 1;
-        this.excavationTimeLeft += 60;
-        this.excavationExtensions += 1;
-        this._savePersist();
-      }
-      return;
-    }
     const si = this._stationAt(x,y);
     if (si < 0){
       // 1) 点中已有线路 (远离任何站) -> 在该位置生成列车
@@ -1265,8 +1240,6 @@ class MetroGame {
       if (this.gameOver){
         if (this.mode === "mystery"){
           this._drawCenterText(`挑战失败  ${this.mysteryDeliveries}/${this.mysteryConfig?this.mysteryConfig.target:0}  按 H 回首页`, DANGER);
-        } else if (this.mode === "excavation"){
-          this._drawCenterText(`时间到!  共送达 ${this.score}  按 H 回首页`, DANGER);
         } else {
           this._drawCenterText(`游戏结束  送达乘客: ${this.score}  按 R 重开`, DANGER);
         }
@@ -1426,12 +1399,9 @@ class MetroGame {
       const status = this.mysteryWon ? "✓ 已达成" : `${this.mysteryDeliveries}/${cfg.target}`;
       row1Parts.push(`挑战: ${status}  ⏳ ${mm}:${ss}  奖励 ${cfg.reward}`);
     }
-    // 挖掘模式: 显示倒计时 + 建线成本提示
+    // 挖掘模式: 提示建线成本规则
     if (this.mode === "excavation"){
-      const rem = Math.max(0, Math.ceil(this.excavationTimeLeft));
-      const mm = String(Math.floor(rem/60)).padStart(2,"0");
-      const ss = String(rem%60).padStart(2,"0");
-      row1Parts.push(`⏳ ${mm}:${ss}  建满屏线需 ${EXCAVATION_LINE_FULL_COST} 送达`);
+      row1Parts.push(`建满屏线需 ${EXCAVATION_LINE_FULL_COST} 送达`);
     }
     ctx.fillStyle = TEXT;
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
@@ -1451,25 +1421,7 @@ class MetroGame {
       const rem = Math.max(0, Math.floor(b.remaining));
       row2Parts.push(`车厢+${b.bonus} ${String(Math.floor(rem/60)).padStart(2,"0")}:${String(rem%60).padStart(2,"0")}`);
     }
-    const row2Text = row2Parts.join("    ");
-    ctx.fillText(row2Text, 16, 50);
-    // 挖掘模式: 在 row2 右边画一个 "+1 分钟 (1 金币)" 按钮
-    this._huExtRect = null;
-    if (this.mode === "excavation"){
-      const used = this.excavationExtensions || 0;
-      const remainExt = EXCAVATION_MAX_EXTENSIONS - used;
-      const canBuy = this.coins >= 1 && remainExt > 0;
-      const label = `+1 分钟 (1 金币)  剩 ${remainExt}/${EXCAVATION_MAX_EXTENSIONS}`;
-      ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
-      const bw = ctx.measureText(label).width + 18, bh = 22;
-      const bx = SCREEN_W - bw - 16, by = 38;
-      roundRect(ctx, bx, by, bw, bh, 6);
-      ctx.fillStyle = canBuy ? "#2baa4c" : "#cdcdd6"; ctx.fill();
-      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      ctx.fillText(label, bx + bw/2, by + bh/2 + 1);
-      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-      this._huExtRect = canBuy ? { x: bx, y: by, w: bw, h: bh } : null;
-    }
+    ctx.fillText(row2Parts.join("    "), 16, 50);
 
     // 底部提示 + 署名
     ctx.fillStyle = "#82828a";
