@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini Metro · 原版 (历史)</title>
+<style>
+  html, body {
+    margin:0; padding:0; height:100%;
+    background:#f5f4f0;
+    font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Heiti SC",Arial,sans-serif;
+    color:#28282d; overflow:hidden; user-select:none; -webkit-user-select:none;
+  }
+  #stage { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+  canvas#game {
+    display:block; background:#fff; border-radius:6px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.08);
+    max-width:100%; max-height:100%; touch-action:none;
+  }
+  #back {
+    position:fixed; top:14px; left:16px;
+    padding:7px 14px; border:0; border-radius:8px;
+    background:#fff; color:#3c3c46; border:1px solid #cdcdd6;
+    cursor:pointer; font-family:inherit; font-size:14px;
+    box-shadow:0 2px 6px rgba(0,0,0,0.08); text-decoration:none;
+  }
+</style>
+</head>
+<body>
+<a id="back" href="../index.html">← 返回主页</a>
+<div id="stage"><canvas id="game" width="1200" height="760"></canvas></div>
+<script>
+"use strict";
+
+// ============================================================
+// 原版 (历史) — 无模式 / 无商城 / 无金币 / 自动生成站台
+// 玩法: 鼠标左键拖线连两站, 列车自动来回送乘客到对应形状目的地。
+//       任一站乘客超 10 人累计 25 秒 -> Game Over。
+// ============================================================
+const SCREEN_W = 1200, SCREEN_H = 760, HUD_H = 50, FPS = 60;
+const BG = "#f5f4f0", HUD_BG = "#fff", TEXT = "#28282d", DANGER = "#dc3c3c";
+const LINE_COLORS = ["#d81b1b","#205fbf","#f5ae1a","#2baa4c","#8a50a8","#1c1c1c","#e87123"];
+const SHAPES = ["circle","square","triangle","diamond","pentagon"];
+const SHAPE_WEIGHTS = [40,30,20,7,3];
+
+const STATION_RADIUS = 16, STATION_HIT_R = 22;
+const PASSENGER_SIZE = 7;
+const TRAIN_LEN = 28, TRAIN_W = 12;
+const TRAIN_SPEED = 70.0;
+const STATION_CAP = 6;          // 超 6 人开始过载倒计时
+const STATION_OVERLOAD_TIME = 25.0;
+const NEW_STATION_INTERVAL = 14.0;
+const REWARD_INTERVAL = 30.0;
+const INITIAL_LINES = 3, INITIAL_CARRIAGES = 3, INITIAL_STATIONS = 3;
+const TRAIN_CAP_BASE = 6, CARRIAGE_CAP = 4;
+
+function randRange(a,b){ return a + Math.random()*(b-a); }
+function clamp(v,lo,hi){ return Math.max(lo, Math.min(hi,v)); }
+function dist2(ax,ay,bx,by){ return (ax-bx)*(ax-bx)+(ay-by)*(ay-by); }
+function weightedChoice(items, weights){
+  const total = weights.reduce((a,b)=>a+b,0);
+  let r = Math.random()*total;
+  for (let i=0;i<items.length;i++){ r -= weights[i]; if (r<=0) return items[i]; }
+  return items[items.length-1];
+}
+function drawShape(ctx, shape, x, y, r, fill, stroke, lw){
+  ctx.beginPath();
+  if (shape==="circle") ctx.arc(x,y,r,0,Math.PI*2);
+  else if (shape==="square") ctx.rect(x-r,y-r,2*r,2*r);
+  else if (shape==="triangle"){ ctx.moveTo(x,y-r-1); ctx.lineTo(x-r,y+r*0.7); ctx.lineTo(x+r,y+r*0.7); ctx.closePath(); }
+  else if (shape==="diamond"){ ctx.moveTo(x,y-r); ctx.lineTo(x+r,y); ctx.lineTo(x,y+r); ctx.lineTo(x-r,y); ctx.closePath(); }
+  else if (shape==="pentagon"){
+    for (let k=0;k<5;k++){ const a=-Math.PI/2+k*2*Math.PI/5; const px=x+Math.cos(a)*r, py=y+Math.sin(a)*r; if (k===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); }
+    ctx.closePath();
+  }
+  if (fill){ ctx.fillStyle=fill; ctx.fill(); }
+  if (stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=lw||1; ctx.stroke(); }
+}
+function drawRotRect(ctx, cx, cy, w, h, angle, fill, stroke, lw){
+  ctx.save(); ctx.translate(cx,cy); ctx.rotate(angle);
+  ctx.beginPath(); ctx.rect(-w/2,-h/2,w,h);
+  if (fill){ ctx.fillStyle=fill; ctx.fill(); }
+  if (stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=lw||1; ctx.stroke(); }
+  ctx.restore();
+}
+
+function newStation(x,y,shape){
+  return { x, y, shape, passengers:[], spawnTimer:0, spawnInterval:7.0, overloadTimer:0 };
+}
+function newTrain(lineIdx){
+  return { lineIdx, segIdx:0, t:0, direction:1, passengers:[], carriages:0 };
+}
+function trainCapacity(tr){ return TRAIN_CAP_BASE + tr.carriages * CARRIAGE_CAP; }
+function newLine(color){ return { color, stations:[], trains:[] }; }
+
+class Game {
+  constructor(canvas){
+    this.canvas = canvas; this.ctx = canvas.getContext("2d");
+    this.reset();
+    this._bindEvents();
+  }
+  reset(){
+    this.stations = []; this.lines = [];
+    this.availableLines = INITIAL_LINES;
+    this.availableCarriages = INITIAL_CARRIAGES;
+    this.time = 0; this.spawnStationTimer = 0; this.rewardTimer = 0;
+    this.rewardAlt = 0; this.score = 0;
+    this.paused = false; this.gameOver = false; this.speedScale = 1.0;
+    this.drag = null;
+    for (let i=0;i<INITIAL_STATIONS;i++) this._spawnStation(true);
+  }
+  _spawnStation(forceBasic){
+    const margin = 50, top = HUD_H + margin;
+    for (let tries=0; tries<200; tries++){
+      const x = randRange(margin, SCREEN_W - margin);
+      const y = randRange(top, SCREEN_H - margin);
+      let ok = true;
+      for (const s of this.stations) if (dist2(s.x,s.y,x,y) < (STATION_RADIUS*5)**2){ ok=false; break; }
+      if (!ok) continue;
+      let shape = forceBasic ? SHAPES[Math.floor(Math.random()*3)]
+                             : weightedChoice(SHAPES, SHAPE_WEIGHTS);
+      if (this.stations.length < 3){
+        const used = new Set(this.stations.map(s=>s.shape));
+        const cand = SHAPES.slice(0,3).filter(sh=>!used.has(sh));
+        if (cand.length) shape = cand[Math.floor(Math.random()*cand.length)];
+      }
+      this.stations.push(newStation(x,y,shape));
+      return true;
+    }
+    return false;
+  }
+  _stationAt(mx,my){
+    for (let i=0;i<this.stations.length;i++){
+      const s = this.stations[i];
+      if (dist2(s.x,s.y,mx,my) <= STATION_HIT_R*STATION_HIT_R) return i;
+    }
+    return -1;
+  }
+  _segLength(line, idx){
+    const a = this.stations[line.stations[idx]], b = this.stations[line.stations[idx+1]];
+    return Math.hypot(b.x-a.x, b.y-a.y);
+  }
+  _assignCarriagesAuto(line){
+    if (!line.trains.length) return;
+    while (this.availableCarriages > 0){
+      let target = line.trains[0];
+      for (const t of line.trains) if (t.carriages < target.carriages) target = t;
+      if (target.carriages >= 2) break;
+      const total = line.trains.reduce((a,t)=>a+t.carriages,0);
+      if (total >= line.trains.length * 2) break;
+      if (Math.random() < 0.005){ target.carriages += 1; this.availableCarriages -= 1; }
+      else break;
+    }
+  }
+  _trainVisit(tr, line, stationIdx){
+    const s = this.stations[stationIdx];
+    const newP = [];
+    for (const p of tr.passengers){
+      if (p === s.shape) this.score += 1;
+      else newP.push(p);
+    }
+    tr.passengers = newP;
+    const lineShapes = new Set(line.stations.map(i=>this.stations[i].shape));
+    const remaining = [];
+    const cap = trainCapacity(tr);
+    for (const p of s.passengers){
+      if (tr.passengers.length < cap && lineShapes.has(p) && p !== s.shape) tr.passengers.push(p);
+      else remaining.push(p);
+    }
+    s.passengers = remaining;
+  }
+
+  update(dt){
+    if (this.paused || this.gameOver) return;
+    dt *= this.speedScale;
+    this.time += dt;
+    this.spawnStationTimer += dt;
+    this.rewardTimer += dt;
+    if (this.spawnStationTimer >= NEW_STATION_INTERVAL){
+      this.spawnStationTimer = 0; this._spawnStation(false);
+    }
+    if (this.rewardTimer >= REWARD_INTERVAL){
+      this.rewardTimer = 0;
+      if (this.rewardAlt === 0) this.availableCarriages += 1;
+      else this.availableLines += 1;
+      this.rewardAlt = 1 - this.rewardAlt;
+    }
+    for (const s of this.stations){
+      s.spawnTimer += dt;
+      if (s.spawnTimer >= s.spawnInterval){
+        s.spawnTimer = 0;
+        const others = SHAPES.filter(sh=>sh!==s.shape);
+        const w = others.map(sh => SHAPE_WEIGHTS[SHAPES.indexOf(sh)]);
+        s.passengers.push(weightedChoice(others, w));
+      }
+    }
+    for (const s of this.stations){
+      if (s.passengers.length > STATION_CAP){
+        s.overloadTimer += dt;
+        if (s.overloadTimer >= STATION_OVERLOAD_TIME){ this.gameOver = true; return; }
+      } else {
+        s.overloadTimer = Math.max(0, s.overloadTimer - dt*0.5);
+      }
+    }
+    for (const line of this.lines){
+      if (line.stations.length < 2) continue;
+      const nSegs = line.stations.length - 1;
+      this._assignCarriagesAuto(line);
+      for (const tr of line.trains){
+        let segLen = this._segLength(line, tr.segIdx); if (segLen < 1e-3) segLen = 1;
+        tr.t += (TRAIN_SPEED / segLen) * dt * tr.direction;
+        let safe = 0;
+        while ((tr.t >= 1 || tr.t <= 0) && safe++ < 8){
+          if (tr.t >= 1){
+            const arrived = line.stations[tr.segIdx+1];
+            this._trainVisit(tr, line, arrived);
+            const leftover = tr.t - 1;
+            if (tr.segIdx + 1 < nSegs){ tr.segIdx += 1; tr.t = leftover; }
+            else { tr.direction = -1; tr.t = 1 - leftover; }
+          } else {
+            const arrived = line.stations[tr.segIdx];
+            this._trainVisit(tr, line, arrived);
+            const overflow = -tr.t;
+            if (tr.segIdx > 0){ tr.segIdx -= 1; tr.t = 1 - overflow; }
+            else { tr.direction = 1; tr.t = overflow; }
+          }
+          segLen = this._segLength(line, tr.segIdx); if (segLen < 1e-3) segLen = 1;
+        }
+      }
+    }
+  }
+
+  draw(){
+    const ctx = this.ctx;
+    ctx.fillStyle = BG; ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
+    // 线路
+    ctx.lineWidth = 7; ctx.lineJoin="round"; ctx.lineCap="round";
+    for (const line of this.lines){
+      if (line.stations.length < 2) continue;
+      ctx.strokeStyle = line.color;
+      ctx.beginPath();
+      for (let i=0;i<line.stations.length;i++){
+        const s = this.stations[line.stations[i]];
+        if (i===0) ctx.moveTo(s.x,s.y); else ctx.lineTo(s.x,s.y);
+      }
+      ctx.stroke();
+    }
+    // 拖线预览
+    if (this.drag){
+      const s = this.stations[this.drag.fromStation];
+      let color = "#b4b4b4";
+      if (this.drag.lineIdx !== null) color = this.lines[this.drag.lineIdx].color;
+      else if (this.availableLines > 0) color = LINE_COLORS[this.lines.length % LINE_COLORS.length];
+      ctx.strokeStyle = color; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(s.x,s.y); ctx.lineTo(this.drag.mouse[0], this.drag.mouse[1]); ctx.stroke();
+    }
+    // 列车
+    for (const line of this.lines){
+      if (line.stations.length < 2) continue;
+      for (const tr of line.trains){
+        const a = this.stations[line.stations[tr.segIdx]];
+        const b = this.stations[line.stations[tr.segIdx+1]];
+        const x = a.x + (b.x-a.x)*tr.t;
+        const y = a.y + (b.y-a.y)*tr.t;
+        const angle = Math.atan2(b.y-a.y, b.x-a.x);
+        const bodies = 1 + tr.carriages;
+        const gap = 4;
+        const totalLen = bodies*TRAIN_LEN + (bodies-1)*gap;
+        const start = -totalLen/2 + TRAIN_LEN/2;
+        for (let i=0;i<bodies;i++){
+          const cx = x + Math.cos(angle)*(start + i*(TRAIN_LEN+gap));
+          const cy = y + Math.sin(angle)*(start + i*(TRAIN_LEN+gap));
+          drawRotRect(ctx, cx, cy, TRAIN_LEN, TRAIN_W, angle, line.color, "#23232d", 2);
+        }
+        if (tr.passengers.length > 0){
+          const headCx = x + Math.cos(angle)*(start + (bodies-1)*(TRAIN_LEN+gap));
+          const headCy = y + Math.sin(angle)*(start + (bodies-1)*(TRAIN_LEN+gap));
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 14px " + getComputedStyle(document.body).fontFamily;
+          ctx.textAlign="center"; ctx.textBaseline="middle";
+          ctx.fillText(String(tr.passengers.length), headCx, headCy);
+        }
+      }
+    }
+    // 站台
+    for (const s of this.stations){
+      if (s.overloadTimer > 0.1){
+        const r = STATION_RADIUS + 8 + Math.sin(this.time*6)*1.5;
+        ctx.strokeStyle = DANGER;
+        ctx.lineWidth = 2 + Math.min(4, s.overloadTimer/STATION_OVERLOAD_TIME * 4);
+        ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI*2); ctx.stroke();
+      }
+      drawShape(ctx, s.shape, s.x, s.y, STATION_RADIUS, "#fff", "#23232d", 3);
+      // 乘客
+      for (let i=0;i<s.passengers.length;i++){
+        const row = Math.floor(i/4), col = i%4;
+        const px = s.x + STATION_RADIUS + 6 + col*(PASSENGER_SIZE*2+2);
+        const py = s.y - STATION_RADIUS + row*(PASSENGER_SIZE*2+2);
+        drawShape(ctx, s.passengers[i], px, py, PASSENGER_SIZE, "#3c3c41", "#23232d", 1);
+      }
+    }
+    // HUD
+    ctx.fillStyle = HUD_BG; ctx.fillRect(0,0,SCREEN_W,HUD_H);
+    ctx.strokeStyle = "#dcdcdc"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0,HUD_H); ctx.lineTo(SCREEN_W,HUD_H); ctx.stroke();
+    ctx.fillStyle = TEXT;
+    ctx.font = "16px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    const text = `[原版]  送达: ${this.score}    车站: ${this.stations.length}    可用线路: ${this.availableLines}    可用车厢: ${this.availableCarriages}    时间: ${Math.floor(this.time)}s`;
+    ctx.fillText(text, 100, 28);
+    ctx.fillStyle = "#82828a";
+    ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "right";
+    ctx.fillText("左键拖动连两站 · 空格暂停 · +/− 调速 · R 重开", SCREEN_W - 16, 28);
+    ctx.fillStyle = "#b8b8c0"; ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "left";
+    ctx.fillText("Powered by 江星野", 16, SCREEN_H - 8);
+    if (this.paused && !this.gameOver) this._drawCenter("已暂停 (空格继续)", "#3c3c3c");
+    if (this.gameOver) this._drawCenter(`Game Over  送达 ${this.score}  按 R 重开`, DANGER);
+  }
+  _drawCenter(text, color){
+    const ctx = this.ctx;
+    ctx.font = "bold 32px " + getComputedStyle(document.body).fontFamily;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const w = ctx.measureText(text).width;
+    const x = SCREEN_W/2, y = SCREEN_H/2;
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(x-w/2-20, y-28, w+40, 56);
+    ctx.fillStyle = color; ctx.fillText(text, x, y);
+  }
+
+  _bindEvents(){
+    const cv = this.canvas;
+    const toC = (cx, cy) => {
+      const r = cv.getBoundingClientRect();
+      const sx = cv.width/r.width, sy = cv.height/r.height;
+      return [(cx - r.left)*sx, (cy - r.top)*sy];
+    };
+    cv.addEventListener("contextmenu", e=>e.preventDefault());
+    cv.addEventListener("mousedown", e=>{
+      if (this.gameOver) return;
+      const [x,y] = toC(e.clientX, e.clientY);
+      if (e.button !== 0) return;
+      const si = this._stationAt(x,y);
+      if (si < 0) return;
+      for (let li=0; li<this.lines.length; li++){
+        const line = this.lines[li];
+        if (!line.stations.length) continue;
+        if (line.stations[0] === si){ this.drag = {fromStation:si, lineIdx:li, side:-1, mouse:[x,y]}; return; }
+        if (line.stations[line.stations.length-1] === si){ this.drag = {fromStation:si, lineIdx:li, side:1, mouse:[x,y]}; return; }
+      }
+      if (this.availableLines > 0) this.drag = {fromStation:si, lineIdx:null, side:1, mouse:[x,y]};
+    });
+    cv.addEventListener("mousemove", e=>{
+      if (this.drag){ const [x,y] = toC(e.clientX, e.clientY); this.drag.mouse = [x,y]; }
+    });
+    cv.addEventListener("mouseup", e=>{
+      if (!this.drag) return;
+      const [x,y] = toC(e.clientX, e.clientY);
+      const target = this._stationAt(x,y);
+      const from = this.drag.fromStation;
+      if (target < 0 || target === from){ this.drag = null; return; }
+      const d = this.drag;
+      if (d.lineIdx !== null){
+        const line = this.lines[d.lineIdx];
+        if (!line.stations.includes(target)){
+          if (d.side === 1) line.stations.push(target);
+          else line.stations.unshift(target);
+        }
+      } else if (this.availableLines > 0){
+        const color = LINE_COLORS[this.lines.length % LINE_COLORS.length];
+        const ln = newLine(color);
+        ln.stations = [from, target];
+        ln.trains = [newTrain(this.lines.length)];
+        this.lines.push(ln);
+        this.availableLines -= 1;
+      }
+      this.drag = null;
+    });
+    window.addEventListener("keydown", e=>{
+      const k = e.key;
+      if (k === " " || k === "Spacebar"){ this.paused = !this.paused; e.preventDefault(); }
+      else if (k.toLowerCase() === "r") this.reset();
+      else if (k === "+" || k === "=") this.speedScale = Math.min(4, this.speedScale + 0.25);
+      else if (k === "-" || k === "_") this.speedScale = Math.max(0.25, this.speedScale - 0.25);
+    });
+  }
+}
+
+const canvas = document.getElementById("game");
+const game = new Game(canvas);
+function fit(){
+  const cssW = window.innerWidth, cssH = window.innerHeight;
+  const ratio = SCREEN_W / SCREEN_H;
+  let w = cssW, h = cssW / ratio;
+  if (h > cssH){ h = cssH; w = cssH * ratio; }
+  canvas.style.width = w + "px"; canvas.style.height = h + "px";
+}
+window.addEventListener("resize", fit); fit();
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  game.update(dt); game.draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
