@@ -139,6 +139,20 @@
     user-select: none;
   }
   .modal .close:hover { color: #28282d; }
+  /* 神秘模式选项 */
+  #mystery-modal .card { width: min(460px, 92vw); }
+  .mystery-choice {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 14px; margin: 8px 0;
+    border: 2px solid #ececf0; border-radius: 10px;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  .mystery-choice:hover { border-color: #d81b1b; background: #fff8f8; }
+  .mystery-choice.disabled { opacity: 0.5; cursor: not-allowed; }
+  .mystery-choice .left strong { font-size: 17px; color: #d81b1b; }
+  .mystery-choice .left small { display: block; color: #6e6e78; font-size: 12px; margin-top: 3px; }
+  .mystery-choice .reward { color: #2baa4c; font-weight: 600; }
   /* 排行榜 */
   #leaderboard-modal .card { width: min(520px, 95vw); }
   table.lb { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
@@ -213,6 +227,20 @@
   </div>
 </div>
 
+<!-- 神秘模式 入口模态 -->
+<div class="modal" id="mystery-modal" hidden>
+  <div class="card">
+    <span class="close" id="mystery-close">×</span>
+    <h2>神秘模式  ·  挑战与回报</h2>
+    <p style="color:#6e6e78;margin:4px 0 14px;font-size:13px">
+      投入越多金币 = 挑战越大 + 回报越高。成功完成挑战奖励 = 投入 × 2。<br>
+      此模式下日常送达 <b>不会</b> 累计金币。
+    </p>
+    <div id="mystery-choices"></div>
+    <div class="msg" id="mystery-msg"></div>
+  </div>
+</div>
+
 <!-- 排行榜模态 -->
 <div class="modal" id="leaderboard-modal" hidden>
   <div class="card">
@@ -268,12 +296,17 @@ const PLATFORM_EDGE = "#2d2d37";
 const NEW_STATION_INTERVAL = 14.0;
 const REWARD_INTERVAL = 30.0;
 const INITIAL_LINES = 3;
-const INITIAL_CARRIAGES = 3;
+const INITIAL_TRAINS = 3;
 const INITIAL_STATION_BUDGET = 2;
-const TRAIN_CAP_BASE = 3;
-const CARRIAGE_CAP = 3;
+const TRAIN_CAP_BASE = 6;        // 单列车基础载客 (合并了原 "车厢" 概念)
+const MAX_TRAINS_PER_LINE = 4;
 const HIGH_SPAWN = 6.0;
 const LOW_SPAWN = 10.0;
+const LINE_CLICK_RADIUS = 14;   // 左键点击距线段 <= 该距离视为点中线路
+// 挖掘模式
+const EXCAVATION_TIME_LIMIT = 180;            // 180 秒 = 3 分钟
+const EXCAVATION_LINE_FULL_COST = 80;         // 跨满屏高度的线需 80 送达
+const EXCAVATION_MAX_EXTENSIONS = 3;          // 最多 +1 分钟 3 次
 
 const COIN_PER_DELIVERIES = 100;
 const SHOP_ITEMS = [
@@ -372,11 +405,11 @@ function newStation(x,y,shape, opts){
 function newTrain(lineIdx){
   return {
     lineIdx, segIdx:0, t:0, direction:1,
-    passengers:[], carriages:0,
+    passengers:[],
   };
 }
 function trainCapacity(tr, bonus){
-  return TRAIN_CAP_BASE + tr.carriages * (CARRIAGE_CAP + (bonus||0));
+  return TRAIN_CAP_BASE + (bonus||0);
 }
 function newLine(color){
   return { color, stations:[], trains:[] };
@@ -434,12 +467,23 @@ class MetroGame {
     this.lines = [];
     this.zones = [];
     this.availableLines = INITIAL_LINES;
-    this.availableCarriages = INITIAL_CARRIAGES;
+    this.availableTrains = INITIAL_TRAINS;
     this.availableStations = INITIAL_STATION_BUDGET;
 
     // 待续局快照 (从云端或 localStorage 拿到的 current_game)
     this._pendingResume = null;
     this._homeContinueRect = null;
+    this._homeTitleRect = null;
+    // 神秘模式: 入局押金 / 目标送达数 / 时限(秒) / 已送达 / 是否已赢
+    this.mysteryConfig = null;
+    this.mysteryDeliveries = 0;
+    this.mysteryTimeLeft = 0;
+    this.mysteryWon = false;
+    // 挖掘模式: 时限 (秒) + 已用 +1 分钟次数
+    this.excavationTimeLeft = 0;
+    this.excavationExtensions = 0;
+    this._huExtRect = null;          // +1 分钟按钮的命中区
+    this._homeExcavateBtnRect = null;
     // 云端 push 防抖
     this._cloudStatsTimer = null;
     this._cloudSnapTimer = null;
@@ -496,7 +540,7 @@ class MetroGame {
       rewardTimer: this.rewardTimer,
       rewardAlt: this.rewardAlt,
       availableLines: this.availableLines,
-      availableCarriages: this.availableCarriages,
+      availableTrains: this.availableTrains,
       availableStations: this.availableStations,
       zones: this.zones.map(z=>({x:z.x, y:z.y, kind:z.kind})),
       stations: this.stations.map(s=>({
@@ -509,7 +553,7 @@ class MetroGame {
         stations: l.stations.slice(),
         trains: l.trains.map(t=>({
           lineIdx: t.lineIdx, segIdx: t.segIdx, t: t.t, direction: t.direction,
-          passengers: t.passengers.slice(), carriages: t.carriages,
+          passengers: t.passengers.slice(),
         })),
       })),
       activeBoosts: this.activeBoosts.map(b=>({percent:b.percent, remaining:b.remaining})),
@@ -526,7 +570,7 @@ class MetroGame {
     this.rewardTimer = snap.rewardTimer || 0;
     this.rewardAlt = snap.rewardAlt || 0;
     this.availableLines = snap.availableLines || 0;
-    this.availableCarriages = snap.availableCarriages || 0;
+    this.availableTrains = snap.availableTrains || 0;
     this.availableStations = snap.availableStations || 0;
     this.zones = (snap.zones||[]).map(z=>newZone(z.x, z.y, z.kind));
     this.stations = (snap.stations||[]).map(s=>{
@@ -542,7 +586,6 @@ class MetroGame {
         const tr = newTrain(t.lineIdx||0);
         tr.segIdx = t.segIdx||0; tr.t = t.t||0; tr.direction = t.direction||1;
         tr.passengers = (t.passengers||[]).slice();
-        tr.carriages = t.carriages||0;
         return tr;
       });
       return ln;
@@ -555,6 +598,7 @@ class MetroGame {
   }
   _saveCurrentGameThrottled(){
     if (!Cloud.user()) return;
+    if (this.mode === "mystery" || this.mode === "excavation") return;
     clearTimeout(this._cloudSnapTimer);
     this._cloudSnapTimer = setTimeout(()=>{
       Cloud.pushSnapshot(this.snapshot()).catch(e=>console.warn("pushSnapshot", e));
@@ -562,6 +606,7 @@ class MetroGame {
   }
   _saveCurrentGameNow(){
     if (!Cloud.user()) return;
+    if (this.mode === "mystery" || this.mode === "excavation") return;
     clearTimeout(this._cloudSnapTimer);
     Cloud.pushSnapshot(this.snapshot()).catch(e=>console.warn("pushSnapshot", e));
   }
@@ -576,7 +621,7 @@ class MetroGame {
     this.lines = [];
     this.zones = [];
     this.availableLines = INITIAL_LINES;
-    this.availableCarriages = INITIAL_CARRIAGES;
+    this.availableTrains = INITIAL_TRAINS;
     this.availableStations = INITIAL_STATION_BUDGET;
     this.time = 0;
     this.stationGrantTimer = 0;
@@ -588,6 +633,13 @@ class MetroGame {
     this.speedScale = 1.0;
     this.drag = null;
     this.rightDrag = null;
+    // 神秘模式局内字段
+    this.mysteryDeliveries = 0;
+    this.mysteryWon = false;
+    this.mysteryTimeLeft = this.mysteryConfig ? this.mysteryConfig.timeLimit : 0;
+    // 挖掘模式局内字段
+    this.excavationExtensions = 0;
+    this.excavationTimeLeft = (this.mode === "excavation") ? EXCAVATION_TIME_LIMIT : 0;
 
     this._generateZones();
     // 每个区中心一个起始站
@@ -738,6 +790,22 @@ class MetroGame {
     this.time += dt;
     this.stationGrantTimer += dt;
     this.rewardTimer += dt;
+    // 神秘模式倒计时 (实时 dt, 不受游戏内速度倍率影响)
+    if (this.mode === "mystery" && this.mysteryConfig && !this.mysteryWon){
+      this.mysteryTimeLeft = Math.max(0, this.mysteryTimeLeft - rawDt);
+      if (this.mysteryTimeLeft <= 0 && this.mysteryDeliveries < this.mysteryConfig.target){
+        this.gameOver = true;
+        this._clearCurrentGameCloud();
+      }
+    }
+    // 挖掘模式倒计时
+    if (this.mode === "excavation"){
+      this.excavationTimeLeft = Math.max(0, this.excavationTimeLeft - rawDt);
+      if (this.excavationTimeLeft <= 0){
+        this.gameOver = true;
+        this._clearCurrentGameCloud();
+      }
+    }
 
     // boost 倒计时 (用真实秒)
     if (this.activeBoosts.length){
@@ -757,7 +825,7 @@ class MetroGame {
     // 奖励轮换发放
     if (this.rewardTimer >= REWARD_INTERVAL){
       this.rewardTimer = 0;
-      if (this.rewardAlt === 0) this.availableCarriages += 1;
+      if (this.rewardAlt === 0) this.availableTrains += 1;
       else this.availableLines += 1;
       this.rewardAlt = 1 - this.rewardAlt;
     }
@@ -781,7 +849,6 @@ class MetroGame {
       const line = this.lines[li];
       if (line.stations.length < 2) continue;
       const nSegs = line.stations.length - 1;
-      this._assignCarriagesAuto(line);
       for (const tr of line.trains){
         let segLen = this._segLength(line, tr.segIdx); if (segLen < 1e-3) segLen = 1;
         tr.t += (TRAIN_SPEED * sm / segLen) * dt * tr.direction;
@@ -823,33 +890,55 @@ class MetroGame {
     return Math.hypot(b.x-a.x, b.y-a.y);
   }
 
-  _assignCarriagesAuto(line){
-    if (!line.trains.length) return;
-    while (this.availableCarriages > 0){
-      let target = line.trains[0];
-      for (const t of line.trains) if (t.carriages < target.carriages) target = t;
-      if (target.carriages >= 2) break;
-      const total = line.trains.reduce((a,t)=>a+t.carriages,0);
-      if (total >= line.trains.length * 2) break;
-      if (Math.random() < 0.005){
-        target.carriages += 1;
-        this.availableCarriages -= 1;
-      } else break;
+  // 点击线路 (距任意线段中心线 < LINE_CLICK_RADIUS) -> 返回 {lineIdx, segIdx, t}
+  _lineAtClick(x, y){
+    for (let li = 0; li < this.lines.length; li++){
+      const line = this.lines[li];
+      for (let si = 0; si < line.stations.length - 1; si++){
+        const a = this.stations[line.stations[si]];
+        const b = this.stations[line.stations[si+1]];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const lenSq = dx*dx + dy*dy;
+        if (lenSq < 1) continue;
+        let t = ((x - a.x) * dx + (y - a.y) * dy) / lenSq;
+        t = clamp(t, 0, 1);
+        const px = a.x + t * dx, py = a.y + t * dy;
+        const d2 = (x - px) * (x - px) + (y - py) * (y - py);
+        if (d2 < LINE_CLICK_RADIUS * LINE_CLICK_RADIUS){
+          return { lineIdx: li, segIdx: si, t };
+        }
+      }
     }
+    return null;
   }
 
   _trainVisit(tr, line, stationIdx){
     const s = this.stations[stationIdx];
     // 下客
     const newPas = [];
+    let delivered = 0;
     for (const p of tr.passengers){
       if (p === s.shape){
         this.score += 1;
-        this.totalDeliveries += 1;
+        delivered += 1;
       } else newPas.push(p);
     }
     tr.passengers = newPas;
-    this._tickCoins();
+    if (this.mode === "mystery"){
+      // 神秘模式: 不累计 totalDeliveries, 不发金币; 单独追踪挑战进度
+      this.mysteryDeliveries += delivered;
+      const cfg = this.mysteryConfig;
+      if (cfg && !this.mysteryWon && this.mysteryDeliveries >= cfg.target){
+        this.mysteryWon = true;
+        this.coins += cfg.reward;
+        this._savePersist();
+        this._shopMessage = `挑战达成! +${cfg.reward} 金币`;
+        this._shopMsgUntil = this.realTime + 4.0;
+      }
+    } else {
+      this.totalDeliveries += delivered;
+      this._tickCoins();
+    }
     // 上客 (line.stations 上的形状能到的优先)
     const lineShapes = new Set(line.stations.map(i=>this.stations[i].shape));
     const remaining = [];
@@ -957,6 +1046,21 @@ class MetroGame {
       if (this._homeShopBtnRect && pointInRect(x,y,this._homeShopBtnRect)){
         this.shopOpen = true; return;
       }
+      // 点击 "Mini Metro" 标题 -> 神秘模式入口
+      if (this._homeTitleRect && pointInRect(x,y,this._homeTitleRect)){
+        if (typeof openMysteryModal === "function") openMysteryModal();
+        return;
+      }
+      // 点击 "挖掘模式" 按钮 (商城对角)
+      if (this._homeExcavateBtnRect && pointInRect(x,y,this._homeExcavateBtnRect)){
+        this.mode = "excavation";
+        this.mysteryConfig = null;
+        this.reset();
+        this._pendingResume = null;
+        this._clearCurrentGameCloud();
+        this.state = "play";
+        return;
+      }
       // "继续未完成的一局"
       if (this._pendingResume && this._homeContinueRect
           && pointInRect(x,y,this._homeContinueRect)){
@@ -969,6 +1073,7 @@ class MetroGame {
       for (const it of this._homeBirdRects){
         if (pointInRect(x,y,it.rect)){
           this.mode = it.mode;
+          this.mysteryConfig = null;     // 选普通模式时清掉神秘局配置
           this.reset();
           // 开新局 -> 清旧的 pendingResume 和云端 snapshot
           this._pendingResume = null;
@@ -1022,8 +1127,35 @@ class MetroGame {
   }
 
   _onLeftDown(x,y){
+    // 挖掘模式 +1 分钟按钮
+    if (this._huExtRect && pointInRect(x, y, this._huExtRect)){
+      if (this.mode === "excavation"
+          && this.excavationExtensions < EXCAVATION_MAX_EXTENSIONS
+          && this.coins >= 1){
+        this.coins -= 1;
+        this.excavationTimeLeft += 60;
+        this.excavationExtensions += 1;
+        this._savePersist();
+      }
+      return;
+    }
     const si = this._stationAt(x,y);
     if (si < 0){
+      // 1) 点中已有线路 (远离任何站) -> 在该位置生成列车
+      const hit = this._lineAtClick(x, y);
+      if (hit){
+        const line = this.lines[hit.lineIdx];
+        if (this.availableTrains > 0 && line.trains.length < MAX_TRAINS_PER_LINE){
+          const tr = newTrain(hit.lineIdx);
+          tr.segIdx = hit.segIdx;
+          tr.t = hit.t;
+          tr.direction = 1;
+          line.trains.push(tr);
+          this.availableTrains -= 1;
+        }
+        return;
+      }
+      // 2) 空地 -> 建站
       this._placeStation(x,y);
       return;
     }
@@ -1067,10 +1199,22 @@ class MetroGame {
       }
     } else {
       if (this.availableLines > 0){
+        // 挖掘模式: 新建线扣送达 (按纵向跨度 / 屏幕高 * 80, 取上整)
+        if (this.mode === "excavation"){
+          const dy = Math.abs(this.stations[target].y - this.stations[from].y);
+          const cost = Math.max(1, Math.ceil((dy / SCREEN_H) * EXCAVATION_LINE_FULL_COST));
+          if (this.score < cost){
+            this._shopMessage = `挖掘: 建线需 ${cost} 送达, 当前 ${this.score}`;
+            this._shopMsgUntil = this.realTime + 3;
+            this.drag = null;
+            return;
+          }
+          this.score -= cost;
+        }
         const color = LINE_COLORS[this.lines.length % LINE_COLORS.length];
         const ln = newLine(color);
         ln.stations = [from, target];
-        ln.trains = [newTrain(this.lines.length)];
+        ln.trains = [];   // 新线不自带列车; 左键点击线路才生成
         this.lines.push(ln);
         this.availableLines -= 1;
       }
@@ -1118,7 +1262,15 @@ class MetroGame {
       this._drawStations();
       this._drawHud();
       if (this.paused && !this.gameOver) this._drawCenterText("已暂停 (空格继续)", "#3c3c3c");
-      if (this.gameOver) this._drawCenterText(`游戏结束  送达乘客: ${this.score}  按 R 重开`, DANGER);
+      if (this.gameOver){
+        if (this.mode === "mystery"){
+          this._drawCenterText(`挑战失败  ${this.mysteryDeliveries}/${this.mysteryConfig?this.mysteryConfig.target:0}  按 H 回首页`, DANGER);
+        } else if (this.mode === "excavation"){
+          this._drawCenterText(`时间到!  共送达 ${this.score}  按 H 回首页`, DANGER);
+        } else {
+          this._drawCenterText(`游戏结束  送达乘客: ${this.score}  按 R 重开`, DANGER);
+        }
+      }
     }
     if (this.shopOpen) this._drawShop();
     this._updateDocTitle();
@@ -1163,37 +1315,32 @@ class MetroGame {
         const b = this.stations[line.stations[tr.segIdx+1]];
         const x = a.x + (b.x-a.x)*tr.t;
         const y = a.y + (b.y-a.y)*tr.t;
-        const angle = Math.atan2(b.y-a.y, b.x-a.x);
-        this._drawTrainShape(x,y,angle,line.color,tr);
+        this._drawTrainShape(x,y,line.color,tr);
       }
     }
   }
 
-  _drawTrainShape(x,y,angle,color,tr){
+  // 列车: 一个圆点。线路色当外圈, 内填色按"当前载客占容量比"映射到 0/1/2/3 → 蓝/绿/黄/红
+  _drawTrainShape(x,y,color,tr){
     const ctx = this.ctx;
-    const bodies = 1 + tr.carriages;
-    const gap = 4;
-    const totalLen = bodies*TRAIN_LEN + (bodies-1)*gap;
-    const start = -totalLen/2 + TRAIN_LEN/2;
-    // 每节按当前载客数从 0..3 区段着色
     const cap = trainCapacity(tr, this._carriageBonus());
-    const segCap = Math.max(1, Math.floor(cap / bodies));
-    for (let i=0;i<bodies;i++){
-      const cx = x + Math.cos(angle)*(start + i*(TRAIN_LEN+gap));
-      const cy = y + Math.sin(angle)*(start + i*(TRAIN_LEN+gap));
-      // 这节车里的人 (取顺序里的 segCap 段)
-      const inThis = clamp(tr.passengers.length - i*segCap, 0, segCap);
-      const ci = clamp(Math.floor((inThis / segCap) * 3 + 0.0001), 0, 3);
-      drawRotRect(ctx, cx, cy, TRAIN_LEN, TRAIN_W, angle, CAR_COLORS[ci], "#23232d", 2);
-    }
-    // 头车上写总载客
-    if (tr.passengers.length > 0){
-      const headCx = x + Math.cos(angle)*(start + (bodies-1)*(TRAIN_LEN+gap));
-      const headCy = y + Math.sin(angle)*(start + (bodies-1)*(TRAIN_LEN+gap));
+    const load = tr.passengers.length;
+    const ratio = cap > 0 ? load / cap : 0;
+    const ci = clamp(Math.floor(ratio * 3 + 0.0001), 0, 3);
+    const fill = CAR_COLORS[ci];
+    // 线路色外圈 (rim)
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI*2);
+    ctx.fillStyle = color; ctx.fill();
+    // 内填: 载荷色
+    ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI*2);
+    ctx.fillStyle = fill; ctx.fill();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = "#23232d"; ctx.stroke();
+    // 载客数
+    if (load > 0){
       ctx.fillStyle = "#fff";
-      ctx.font = "bold 14px " + getComputedStyle(document.body).fontFamily;
-      ctx.textAlign="center"; ctx.textBaseline="middle";
-      ctx.fillText(String(tr.passengers.length), headCx, headCy);
+      ctx.font = "bold 10px " + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(String(load), x, y);
     }
   }
 
@@ -1254,7 +1401,11 @@ class MetroGame {
     ctx.beginPath(); ctx.moveTo(16,HUD_H/2); ctx.lineTo(SCREEN_W-16,HUD_H/2); ctx.stroke();
 
     const sm = this._speedMultiplier();
-    let modeLabel = (this.mode==="classic") ? "经典" : "正常";
+    let modeLabel = (this.mode==="classic")    ? "经典"
+                  : (this.mode==="normal")     ? "正常"
+                  : (this.mode==="mystery")    ? "🔮 神秘"
+                  : (this.mode==="excavation") ? "⛏ 挖掘"
+                  : this.mode;
     const rm = this._passengerRateMultiplier();
     if (rm < 0.999) modeLabel += ` (客流 x${rm.toFixed(2)})`;
 
@@ -1266,6 +1417,22 @@ class MetroGame {
       `速度: x${this.speedScale.toFixed(2)}`,
     ];
     if (sm > 1.0) row1Parts.push(`地铁倍速: x${sm.toFixed(2)}`);
+    // 神秘模式: 显示挑战进度 + 倒计时
+    if (this.mode === "mystery" && this.mysteryConfig){
+      const cfg = this.mysteryConfig;
+      const rem = Math.max(0, Math.ceil(this.mysteryTimeLeft));
+      const mm = String(Math.floor(rem/60)).padStart(2,"0");
+      const ss = String(rem%60).padStart(2,"0");
+      const status = this.mysteryWon ? "✓ 已达成" : `${this.mysteryDeliveries}/${cfg.target}`;
+      row1Parts.push(`挑战: ${status}  ⏳ ${mm}:${ss}  奖励 ${cfg.reward}`);
+    }
+    // 挖掘模式: 显示倒计时 + 建线成本提示
+    if (this.mode === "excavation"){
+      const rem = Math.max(0, Math.ceil(this.excavationTimeLeft));
+      const mm = String(Math.floor(rem/60)).padStart(2,"0");
+      const ss = String(rem%60).padStart(2,"0");
+      row1Parts.push(`⏳ ${mm}:${ss}  建满屏线需 ${EXCAVATION_LINE_FULL_COST} 送达`);
+    }
     ctx.fillStyle = TEXT;
     ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     ctx.font = "16px " + getComputedStyle(document.body).fontFamily;
@@ -1273,7 +1440,7 @@ class MetroGame {
 
     const row2Parts = [
       `可用线路: ${this.availableLines}`,
-      `可用车厢: ${this.availableCarriages}`,
+      `可用列车: ${this.availableTrains}`,
       `金币: ${this.coins}`,
     ];
     for (const b of this.activeBoosts){
@@ -1284,12 +1451,30 @@ class MetroGame {
       const rem = Math.max(0, Math.floor(b.remaining));
       row2Parts.push(`车厢+${b.bonus} ${String(Math.floor(rem/60)).padStart(2,"0")}:${String(rem%60).padStart(2,"0")}`);
     }
-    ctx.fillText(row2Parts.join("    "), 16, 50);
+    const row2Text = row2Parts.join("    ");
+    ctx.fillText(row2Text, 16, 50);
+    // 挖掘模式: 在 row2 右边画一个 "+1 分钟 (1 金币)" 按钮
+    this._huExtRect = null;
+    if (this.mode === "excavation"){
+      const used = this.excavationExtensions || 0;
+      const remainExt = EXCAVATION_MAX_EXTENSIONS - used;
+      const canBuy = this.coins >= 1 && remainExt > 0;
+      const label = `+1 分钟 (1 金币)  剩 ${remainExt}/${EXCAVATION_MAX_EXTENSIONS}`;
+      ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
+      const bw = ctx.measureText(label).width + 18, bh = 22;
+      const bx = SCREEN_W - bw - 16, by = 38;
+      roundRect(ctx, bx, by, bw, bh, 6);
+      ctx.fillStyle = canBuy ? "#2baa4c" : "#cdcdd6"; ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText(label, bx + bw/2, by + bh/2 + 1);
+      ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+      this._huExtRect = canBuy ? { x: bx, y: by, w: bw, h: bh } : null;
+    }
 
     // 底部提示 + 署名
     ctx.fillStyle = "#82828a";
     ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
-    const hint = "左键空地建站 · 拖线连线 · 端点延伸 · 右键长按拖动站 · 空格暂停 · +/− 调速 · R 重开 · H 首页";
+    const hint = "左键空地建站 · 拖线连线 · 点线路生列车 · 端点延伸 · 右键长按拖动站 · 空格暂停 · +/− 调速 · R 重开 · H 首页";
     const tw = ctx.measureText(hint).width;
     ctx.fillText(hint, SCREEN_W - tw - 16, SCREEN_H - 14);
     ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
@@ -1336,11 +1521,18 @@ class MetroGame {
     ctx.fillText(btnLbl, bx + bw/2, by + bh/2);
     this._homeShopBtnRect = btnRect;
 
-    // 大标题
+    // 大标题 (可点击 -> 神秘模式)
     ctx.fillStyle = "#23232d";
     ctx.font = "bold 64px " + getComputedStyle(document.body).fontFamily;
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText("Mini Metro", SCREEN_W/2, 150);
+    // 记录标题点击区
+    const tw = ctx.measureText("Mini Metro").width;
+    this._homeTitleRect = { x: SCREEN_W/2 - tw/2 - 10, y: 110, w: tw + 20, h: 80 };
+    // 提示
+    ctx.fillStyle = "#a8896b";
+    ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
+    ctx.fillText("点击标题进入神秘模式", SCREEN_W/2, 110);
     // 红色装饰短线
     ctx.fillStyle = "#d81b1b";
     roundRect(ctx, SCREEN_W/2 - 60, 192, 120, 5, 2);
@@ -1404,10 +1596,28 @@ class MetroGame {
     ctx.fillStyle = "#d8d8e0";
     ctx.font = "14px " + getComputedStyle(document.body).fontFamily;
     ctx.textAlign="center"; ctx.textBaseline = "alphabetic";
-    ctx.fillText("点击一只鸟开始  ·  游戏中按 H 返回首页  ·  ESC 退出", SCREEN_W/2, SCREEN_H - 50);
+    ctx.fillText("点击一只鸟开始  ·  点击标题进神秘  ·  ESC 退出", SCREEN_W/2, SCREEN_H - 50);
     ctx.textAlign="left";
     ctx.fillStyle = "#b8b8c0";
     ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
+
+    // 左下角 (商城对角): 挖掘模式入口
+    const exLbl = "⛏ 挖掘模式";
+    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
+    const exW = ctx.measureText(exLbl).width + 28;
+    const exH = 36;
+    const exX = 30, exY = SCREEN_H - 30 - exH;
+    const exRect = { x: exX, y: exY, w: exW, h: exH };
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
+    roundRect(ctx, exX, exY, exW, exH, 10);
+    ctx.fillStyle = "#5e4838"; ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#3a2c1f"; ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(exLbl, exX + exW/2, exY + exH/2);
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    this._homeExcavateBtnRect = exRect;
   }
 
   _drawHomeRails(){
@@ -2004,6 +2214,51 @@ $("btn-leaderboard").addEventListener("click", async ()=>{
   }).join("");
 });
 $("lb-close").addEventListener("click", ()=>{ $("leaderboard-modal").hidden = true; });
+
+// 神秘模式入口
+function openMysteryModal(){
+  const box = $("mystery-choices");
+  const msg = $("mystery-msg");
+  msg.textContent = ""; msg.className = "msg";
+  box.innerHTML = "";
+  for (const n of [1, 2, 3]){
+    const target = 80 * n;
+    const minutes = n;
+    const reward = 2 * n;
+    const can = game.coins >= n;
+    const div = document.createElement("div");
+    div.className = "mystery-choice" + (can ? "" : " disabled");
+    div.innerHTML = `
+      <div class="left">
+        <strong>投入 ${n} 金币</strong>
+        <small>挑战: ${minutes} 分钟内送达 ${target} 次</small>
+      </div>
+      <div class="reward">成功 +${reward} 金币</div>
+    `;
+    if (can){
+      div.addEventListener("click", ()=>{
+        game.coins -= n;
+        game.mysteryConfig = {
+          entryCoins: n,
+          target,
+          timeLimit: minutes * 60,
+          reward,
+        };
+        game.mode = "mystery";
+        game.reset();          // reset 会按 mysteryConfig 设 timeLeft
+        game._pendingResume = null;
+        game._clearCurrentGameCloud();
+        game._savePersist();
+        game.state = "play";
+        $("mystery-modal").hidden = true;
+      });
+    }
+    box.appendChild(div);
+  }
+  $("mystery-modal").hidden = false;
+}
+$("mystery-close").addEventListener("click", ()=>{ $("mystery-modal").hidden = true; });
+$("mystery-modal").addEventListener("click", e=>{ if (e.target.id==="mystery-modal") $("mystery-modal").hidden = true; });
 
 // 关掉模态: 点击 backdrop
 $("auth-modal").addEventListener("click", e=>{ if (e.target.id==="auth-modal") hideAuth(); });
