@@ -75,7 +75,9 @@
     z-index: 50;
     font-size: 15px; line-height: 1;
   }
-  #user-badge button, #user-badge .who {
+  /* :not([hidden]) 很关键 — 否则 id 选择器的 display:flex 会压过 [hidden] 的 display:none,
+     未登录时把空的 who 标签 / 退出按钮当成空框显示出来 */
+  #user-badge button:not([hidden]), #user-badge .who:not([hidden]) {
     box-sizing: border-box; height: 2.4em;   /* 2.4 * 15px = 36px = 商城按钮高度 */
     display: flex; align-items: center;
     padding: 0 0.95em; border-radius: 0.65em;
