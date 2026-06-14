@@ -66,17 +66,24 @@
     white-space: nowrap;
     border: 0;
   }
-  /* 用户徽章 (顶右, 与氪金商城同侧) */
+  /* 用户徽章 (顶右) — fit() 按画布缩放设置 top/right/font-size,
+     使其与画布上的"氪金商城"按钮同高、在同一条水平线上。
+     所有尺寸用 em 表达, 只缩放 font-size 即可整体同比缩放。 */
   #user-badge {
     position: fixed; top: 14px; right: 16px;
-    display: flex; gap: 10px; align-items: center;
+    display: flex; gap: 0.5em; align-items: center;
     z-index: 50;
-    font-size: 14px;
+    font-size: 15px; line-height: 1;
+  }
+  #user-badge button, #user-badge .who {
+    box-sizing: border-box; height: 2.4em;   /* 2.4 * 15px = 36px = 商城按钮高度 */
+    display: flex; align-items: center;
+    padding: 0 0.95em; border-radius: 0.65em;
+    font-size: 1em; font-family: inherit; white-space: nowrap;
   }
   #user-badge button {
-    border: 0; padding: 7px 14px; border-radius: 8px;
-    background: #d81b1b; color: #fff; cursor: pointer;
-    font-weight: 600; font-family: inherit; font-size: 14px;
+    border: 0; font-weight: 600; cursor: pointer;
+    background: #d81b1b; color: #fff;
     box-shadow: 0 2px 6px rgba(0,0,0,0.15);
   }
   #user-badge button.secondary {
@@ -84,8 +91,7 @@
   }
   #user-badge .who {
     background: rgba(255,255,255,0.92);
-    border: 1px solid #cdcdd6;
-    border-radius: 8px; padding: 6px 12px; color: #28282d;
+    border: 1px solid #cdcdd6; color: #28282d;
     box-shadow: 0 2px 6px rgba(0,0,0,0.08);
   }
   /* 模态: 登录注册 / 排行榜 */
@@ -2096,10 +2102,14 @@ function fit(){
   // 否则窗口比 1200:760 更宽时画布居中、左右留黑边, fixed 定位的徽章会掉进黑边里(跑到主图外)。
   const badge = document.getElementById("user-badge");
   if (badge){
+    const scale = w / SCREEN_W;
     const offX = (cssW - w) / 2;   // 画布左右黑边宽
     const offY = (cssH - h) / 2;   // 画布上下黑边高
-    badge.style.right = (offX + 16) + "px";
-    badge.style.top   = (offY + 12) + "px";
+    // 跟随画布缩放, 与画布上"氪金商城"按钮同高、在同一条水平线上:
+    //   商城按钮在画布坐标 y=28 顶、高 36 -> 徽章 font-size*2.4em = 36*scale, top 对齐到 28*scale
+    badge.style.fontSize = (15 * scale) + "px";
+    badge.style.top   = (offY + 28 * scale) + "px";
+    badge.style.right = (offX + 30 * scale) + "px";
   }
 }
 window.addEventListener("resize", fit);
