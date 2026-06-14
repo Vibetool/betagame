@@ -2092,6 +2092,15 @@ function fit(){
   if (h > cssH){ h = cssH; w = cssH * ratio; }
   canvas.style.width = w + "px";
   canvas.style.height = h + "px";
+  // 把登录/排行榜徽章锚到画布(主图)的右上角, 而不是视口边缘。
+  // 否则窗口比 1200:760 更宽时画布居中、左右留黑边, fixed 定位的徽章会掉进黑边里(跑到主图外)。
+  const badge = document.getElementById("user-badge");
+  if (badge){
+    const offX = (cssW - w) / 2;   // 画布左右黑边宽
+    const offY = (cssH - h) / 2;   // 画布上下黑边高
+    badge.style.right = (offX + 16) + "px";
+    badge.style.top   = (offY + 12) + "px";
+  }
 }
 window.addEventListener("resize", fit);
 fit();
