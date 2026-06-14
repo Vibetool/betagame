@@ -66,9 +66,9 @@
     white-space: nowrap;
     border: 0;
   }
-  /* 用户徽章 (顶左) */
+  /* 用户徽章 (顶右, 与氪金商城同侧) */
   #user-badge {
-    position: fixed; top: 14px; left: 16px;
+    position: fixed; top: 14px; right: 16px;
     display: flex; gap: 10px; align-items: center;
     z-index: 50;
     font-size: 14px;
@@ -986,6 +986,8 @@ class MetroGame {
         this._shopMessage = `挑战达成! +${cfg.reward} 金币`;
         this._shopMsgUntil = this.realTime + 4.0;
       }
+    } else if (this.mode === "excavation"){
+      // 挖掘模式: 只用本局 score 作建线货币, 不累计持久送达 / 不发金币
     } else {
       this.totalDeliveries += delivered;
       this._tickCoins();
@@ -1059,7 +1061,11 @@ class MetroGame {
     }
     if (this.state !== "play") return;
     if (k === " " || k === "Spacebar"){ this.paused = !this.paused; e.preventDefault(); }
-    else if (k.toLowerCase() === "r") this.reset();
+    else if (k.toLowerCase() === "r"){
+      // 神秘模式按 R 直接回首页 (需重新付费进入), 防止白嫖重刷挑战奖励
+      if (this.mode === "mystery") this._goHome();
+      else this.reset();
+    }
     else if (k === "+" || k === "=") this.speedScale = Math.min(4, this.speedScale + 0.25);
     else if (k === "-" || k === "_") this.speedScale = Math.max(0.25, this.speedScale - 0.25);
     else if (k.toLowerCase() === "h") this._goHome();
@@ -1068,9 +1074,11 @@ class MetroGame {
   // 离开 play -> home: 把当前一局上传, 把它记为 pendingResume, 然后回首页
   _goHome(){
     if (this.stations.length){
-      const snap = this.snapshot();
-      this._pendingResume = snap;
-      this._saveCurrentGameNow();
+      // 只为可续局的模式 (经典/正常) 保存快照; 神秘/挖掘无法干净恢复, 与云端/beforeunload 的排除保持一致
+      if (this.mode !== "mystery" && this.mode !== "excavation"){
+        this._pendingResume = this.snapshot();
+        this._saveCurrentGameNow();
+      }
       if (Cloud.user()) Cloud.pushBestIfGreater(this.score).catch(()=>{});
     }
     this.state = "home";
@@ -1533,7 +1541,7 @@ class MetroGame {
     ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
     const bw = ctx.measureText(btnLbl).width + 28;
     const bh = 36;
-    const bx = SCREEN_W - bw - 30, by = 24;
+    const bx = SCREEN_W - bw - 30, by = 72;
     const btnRect = {x:bx, y:by, w:bw, h:bh};
     roundRect(ctx, bx, by, bw, bh, 10);
     ctx.fillStyle = "#d81b1b"; ctx.fill();
@@ -1553,14 +1561,11 @@ class MetroGame {
     // 提示
     ctx.fillStyle = "#a8896b";
     ctx.font = "12px " + getComputedStyle(document.body).fontFamily;
-    ctx.fillText("点击标题进入神秘模式", SCREEN_W/2, 110);
+    ctx.fillText("点击标题进入神秘模式", SCREEN_W/2, 84);
     // 红色装饰短线
     ctx.fillStyle = "#d81b1b";
     roundRect(ctx, SCREEN_W/2 - 60, 192, 120, 5, 2);
     ctx.fill();
-    ctx.fillStyle = "#6e6e78";
-    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
-    ctx.fillText("简洁地铁模拟  ·  选择模式", SCREEN_W/2, 232);
 
     // 继续未完成的一局 (如果有 pendingResume)
     this._homeContinueRect = null;
@@ -1613,12 +1618,9 @@ class MetroGame {
       this._homeBirdRects.push({rect, mode});
     }
 
-    // 底部提示 + 署名 (深色隧道背景, 用亮色)
-    ctx.fillStyle = "#d8d8e0";
+    // 署名 (深色隧道背景, 用亮色)
     ctx.font = "14px " + getComputedStyle(document.body).fontFamily;
-    ctx.textAlign="center"; ctx.textBaseline = "alphabetic";
-    ctx.fillText("点击一只鸟开始  ·  点击标题进神秘  ·  ESC 退出", SCREEN_W/2, SCREEN_H - 50);
-    ctx.textAlign="left";
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
     ctx.fillStyle = "#b8b8c0";
     ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
 
@@ -2106,6 +2108,11 @@ requestAnimationFrame(loop);
 // Auth / Leaderboard UI 绑定
 // ===========================================================
 const $ = id => document.getElementById(id);
+// 转义用户可控文本, 避免拼进 innerHTML 造成 XSS (排行榜 display_name 来自邮箱前缀)
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
 
 function refreshAuthUI(){
   const u = Cloud.user();
@@ -2138,10 +2145,13 @@ async function applyCloudSave(){
   if (!Cloud.user()) return;
   const save = await Cloud.fetchSave();
   if (!save) return;
-  // 合并 (取较大值), 避免登录瞬间丢掉本地累计
-  game.coins             = Math.max(game.coins,            save.coins             | 0);
-  game.totalDeliveries   = Math.max(game.totalDeliveries,  save.total_deliveries  | 0);
-  game._coinCredited     = Math.max(game._coinCredited,    save.coin_credited     | 0);
+  // 合并: coins / total_deliveries / coin_credited 三者是耦合的 (金币 = 已发币 - 消费), 不能各自独立取 max
+  // (否则会凭空造币或吞币). 以"送达更多"的一方为准, 整组一起取, 保持不变量自洽.
+  if ((save.total_deliveries | 0) > game.totalDeliveries){
+    game.totalDeliveries = save.total_deliveries | 0;
+    game._coinCredited   = save.coin_credited    | 0;
+    game.coins           = save.coins            | 0;
+  }
   game._pendingResume    = save.current_game || null;
   // 把合并后值推回云端
   try {
@@ -2232,7 +2242,8 @@ $("auth-submit").addEventListener("click", async ()=>{
     $("auth-submit").disabled = false;
   }
 });
-// 回车提交
+// 回车提交 (邮箱框和密码框都支持)
+$("auth-email").addEventListener("keydown", e=>{ if (e.key==="Enter") $("auth-submit").click(); });
 $("auth-password").addEventListener("keydown", e=>{ if (e.key==="Enter") $("auth-submit").click(); });
 
 // 排行榜
@@ -2253,7 +2264,7 @@ $("btn-leaderboard").addEventListener("click", async ()=>{
   }
   $("lb-body").innerHTML = rows.map((r,i)=>{
     const isMe = r.display_name === myName;
-    return `<tr class="${isMe?'me':''}"><td class="rank">${i+1}</td><td>${r.display_name}</td><td class="score">${r.best_score}</td></tr>`;
+    return `<tr class="${isMe?'me':''}"><td class="rank">${i+1}</td><td>${escapeHtml(r.display_name)}</td><td class="score">${r.best_score|0}</td></tr>`;
   }).join("");
 });
 $("lb-close").addEventListener("click", ()=>{ $("leaderboard-modal").hidden = true; });

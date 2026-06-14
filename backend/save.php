@@ -64,10 +64,13 @@ if ($method === 'POST' || $method === 'PUT') {
     }
     if ($type === 'best') {
         $score = max(0, (int)($body['score'] ?? 0));
+        // 注意: MySQL 单表 UPDATE 的 SET 从左到右求值, 后面的赋值会读到前面刚改过的新值.
+        // 所以必须先用旧 best_score 算 best_score_at, 再更新 best_score; 否则破纪录时
+        // best_score 先变成新分, CASE 里的 "? > best_score" 永远为假, 时间戳从不写入.
         $db->prepare(
             'UPDATE user_save
-                SET best_score    = GREATEST(best_score, ?),
-                    best_score_at = CASE WHEN ? > best_score THEN NOW() ELSE best_score_at END
+                SET best_score_at = CASE WHEN ? > best_score THEN NOW() ELSE best_score_at END,
+                    best_score    = GREATEST(best_score, ?)
               WHERE user_id = ?'
         )->execute([$score, $score, (int)$u['id']]);
         json_out(['ok' => true]);

@@ -5,7 +5,6 @@ require __DIR__ . '/db.php';
 
 $out = [
     'ok'          => true,
-    'php_version' => PHP_VERSION,
     'time'        => date('c'),
     'db'          => null,
     'tables'      => null,
@@ -19,7 +18,8 @@ try {
     $out['db'] = $ping->fetchColumn() == 1 ? 'connected' : 'unexpected';
 } catch (Throwable $e) {
     $out['ok'] = false;
-    $out['db'] = 'error: ' . $e->getMessage();
+    $out['db'] = 'error';   // 不向匿名调用者回显原始 PDO 错误 (可能含表名/SQLSTATE)
+    error_log('[metro] health db check failed: ' . $e->getMessage());
 }
 
 // 2) 三张表都在否
@@ -31,7 +31,8 @@ try {
     if ($missing) $out['ok'] = false;
 } catch (Throwable $e) {
     $out['ok'] = false;
-    $out['tables'] = 'error: ' . $e->getMessage();
+    $out['tables'] = 'error';
+    error_log('[metro] health tables check failed: ' . $e->getMessage());
 }
 
 // 3) Authorization 头能不能传到 PHP (Nginx + fastcgi 经常吃头, 这里能直观看到)

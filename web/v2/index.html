@@ -7,10 +7,8 @@
 <meta name="description" content="mini Metro 2026 5 12: 一款浏览器中即点即玩的简洁地铁线路模拟游戏 (Mini Metro 风格), 支持经典模式与正常模式, 含氪金商城、限时速度加成、车厢扩容。Powered by 江星野。">
 <meta name="keywords" content="mini Metro 2026 5 12, mini metro, Mini Metro 2026, mini metro 5 12, 简洁地铁模拟, 地铁模拟游戏, 地铁线路游戏, 浏览器地铁游戏, mini metro web, mini metro 中文, 江星野">
 <meta name="author" content="江星野">
-<meta name="robots" content="index, follow, max-image-preview:large">
-<meta name="googlebot" content="index, follow">
-<meta name="bingbot" content="index, follow">
-<meta name="baiduspider" content="index, follow">
+<!-- 历史存档版, 不参与搜索收录, 避免与首页重复内容 / 关键词内耗 -->
+<meta name="robots" content="noindex, follow">
 <link rel="canonical" href="https://vibetool.github.io/betagame/">
 <!-- Open Graph (Facebook / 微信分享缩略图) -->
 <meta property="og:type" content="website">
@@ -225,8 +223,8 @@
   </div>
 </div>
 
-<!-- 项目级配置 (PHP 后端地址) -->
-<script src="config.js"></script>
+<!-- 项目级配置 (PHP 后端地址) — config.js 只存在于 web/ 根目录, 子目录要用 ../ 引用 -->
+<script src="../config.js"></script>
 
 <script>
 "use strict";
@@ -1999,7 +1997,7 @@ $("auth-password").addEventListener("keydown", e=>{ if (e.key==="Enter") $("auth
 // 排行榜
 $("btn-leaderboard").addEventListener("click", async ()=>{
   if (!Cloud.isEnabled()){
-    alert("未配置 Supabase, 无云端排行榜。请先在 web/config.js 填配置。");
+    alert("未配置后端, 无云端排行榜。请先在 web/config.js 填 window.METRO_BACKEND_URL。");
     return;
   }
   $("leaderboard-modal").hidden = false;
