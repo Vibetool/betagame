@@ -1530,18 +1530,20 @@ class MetroGame {
     ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
     this._drawHomeRails();
 
-    // 顶部左: 累计 / 金币
+    // 顶部左: 累计/金币 + 氪金商城 按钮同一行对齐 (经济信息聚成一组; 顶部右留给 HTML 登录/排行榜徽章)
+    const topRowCY = 46;
+    const homeFont = "20px " + getComputedStyle(document.body).fontFamily;
+    ctx.font = homeFont;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
     ctx.fillStyle = "#3c3c46";
-    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
-    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-    ctx.fillText(`累计送达: ${this.totalDeliveries}    金币: ${this.coins}`, 30, 48);
+    const statsText = `累计送达: ${this.totalDeliveries}    金币: ${this.coins}`;
+    ctx.fillText(statsText, 30, topRowCY);
+    const statsW = ctx.measureText(statsText).width;
 
-    // 顶部右: 商城按钮
     const btnLbl = `氪金商城  (${this.coins})`;
-    ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
     const bw = ctx.measureText(btnLbl).width + 28;
     const bh = 36;
-    const bx = SCREEN_W - bw - 30, by = 72;
+    const bx = 30 + statsW + 26, by = topRowCY - bh/2;
     const btnRect = {x:bx, y:by, w:bw, h:bh};
     roundRect(ctx, bx, by, bw, bh, 10);
     ctx.fillStyle = "#d81b1b"; ctx.fill();
@@ -1618,13 +1620,13 @@ class MetroGame {
       this._homeBirdRects.push({rect, mode});
     }
 
-    // 署名 (深色隧道背景, 用亮色)
+    // 署名 (居中放底部, 给左下角的挖掘按钮让位)
     ctx.font = "14px " + getComputedStyle(document.body).fontFamily;
-    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
     ctx.fillStyle = "#b8b8c0";
-    ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
+    ctx.fillText("Powered by 江星野", SCREEN_W/2, SCREEN_H - 16);
 
-    // 左下角 (商城对角): 挖掘模式入口
+    // 左下角: 挖掘模式入口
     const exLbl = "⛏ 挖掘模式";
     ctx.font = "20px " + getComputedStyle(document.body).fontFamily;
     const exW = ctx.measureText(exLbl).width + 28;
