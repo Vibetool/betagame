@@ -366,8 +366,8 @@ const PLATFORM_EDGE = "#2d2d37";
 const GRID_SIZE = STATION_SQUARE;            // 36
 const GRID_X0 = GRID_SIZE / 2;               // 第一列圆点 x = 18
 const GRID_Y0 = HUD_H + GRID_SIZE / 2;       // 第一行圆点 y = HUD + 18 = 78
-const GRID_DOT_COLOR = "#7a7a85";   // 提到可见档 (对比度 ~5:1), 不再被笔记本屏白光吃掉
-const GRID_DOT_R = 2.0;             // 整数半径 (像素对齐) + 抗锯齿后约 4-5 px, 明显
+const GRID_DOT_COLOR = "#98989f";   // 方案 A: 中等浅灰, 对比度 ~4:1, 比 B 柔和不刺眼
+const GRID_DOT_R = 2.3;             // 半径稍大补偿颜色变浅, 抗锯齿后仍明显
 
 function snapToGrid(x, y){
   return [
