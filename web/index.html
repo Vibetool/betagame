@@ -362,6 +362,20 @@ const STATION_RADIUS = 4;
 const PLATFORM_FILL = "#ffffff";
 const PLATFORM_EDGE = "#2d2d37";
 
+// 网格 — 站台对齐到圆点上, 相邻两个圆点距离 = 站台边长, 这样相邻站台严丝合缝无缝隙
+const GRID_SIZE = STATION_SQUARE;            // 36
+const GRID_X0 = GRID_SIZE / 2;               // 第一列圆点 x = 18
+const GRID_Y0 = HUD_H + GRID_SIZE / 2;       // 第一行圆点 y = HUD + 18 = 78
+const GRID_DOT_COLOR = "#d8d8de";
+const GRID_DOT_R = 1.4;
+
+function snapToGrid(x, y){
+  return [
+    Math.round((x - GRID_X0) / GRID_SIZE) * GRID_SIZE + GRID_X0,
+    Math.round((y - GRID_Y0) / GRID_SIZE) * GRID_SIZE + GRID_Y0,
+  ];
+}
+
 const NEW_STATION_INTERVAL = 14.0;
 const REWARD_INTERVAL = 30.0;
 const INITIAL_LINES = 3;
@@ -717,7 +731,8 @@ class MetroGame {
       const shape = choices[Math.floor(Math.random()*choices.length)];
       used.add(shape);
       const interval = z.kind === "high" ? HIGH_SPAWN : LOW_SPAWN;
-      this.stations.push(newStation(z.x, z.y, shape, {interval, zoneKind: z.kind}));
+      const [sx, sy] = snapToGrid(z.x, z.y);
+      this.stations.push(newStation(sx, sy, shape, {interval, zoneKind: z.kind}));
     }
   }
 
@@ -761,16 +776,19 @@ class MetroGame {
   }
 
   _canPlaceStationAt(x,y){
-    if (x < 50 || x > SCREEN_W-50) return false;
-    if (y < HUD_H+50 || y > SCREEN_H-50) return false;
+    // 不能跑出可视区域 (站台尺寸是 STATION_SQUARE, 半边长 = GRID_X0)
+    if (x < GRID_X0 || x > SCREEN_W - GRID_X0) return false;
+    if (y < GRID_Y0 || y > SCREEN_H - GRID_X0) return false;
+    // 中心距 >= GRID_SIZE 视为不重叠 (严丝合缝是允许的); -0.5 兜底浮点
     for (const s of this.stations){
-      if (dist2(s.x,s.y,x,y) < (STATION_SQUARE*1.6)**2) return false;
+      if (dist2(s.x,s.y,x,y) < (GRID_SIZE - 0.5)*(GRID_SIZE - 0.5)) return false;
     }
     return true;
   }
 
   _placeStation(x,y){
     if (this.availableStations <= 0) return false;
+    [x, y] = snapToGrid(x, y);   // 对齐到网格圆点
     if (!this._canPlaceStationAt(x,y)) return false;
     const [interval, kind] = this._spawnIntervalFor(x,y);
     const shape = weightedChoice(SHAPES, SHAPE_WEIGHTS);
@@ -1184,9 +1202,13 @@ class MetroGame {
         this.rightDrag.moved = true;
       }
       const s = this.stations[this.rightDrag.station];
-      const m = 20;
-      s.x = clamp(x, m, SCREEN_W - m);
-      s.y = clamp(y, HUD_H + m, SCREEN_H - m);
+      // 拖动也 snap 到网格圆点上
+      const [sx, sy] = snapToGrid(
+        clamp(x, GRID_X0, SCREEN_W - GRID_X0),
+        clamp(y, GRID_Y0, SCREEN_H - GRID_X0),
+      );
+      s.x = sx;
+      s.y = sy;
     }
   }
 
@@ -1316,6 +1338,7 @@ class MetroGame {
     } else {
       ctx.fillStyle = BG;
       ctx.fillRect(0,0,SCREEN_W,SCREEN_H);
+      this._drawGridDots();
       this._drawLines();
       this._drawDragPreview();
       this._drawTrains();
@@ -1332,6 +1355,19 @@ class MetroGame {
     }
     if (this.shopOpen) this._drawShop();
     this._updateDocTitle();
+  }
+
+  _drawGridDots(){
+    // 平铺浅灰小圆点, 间距 = STATION_SQUARE, 站台正好落在圆点上, 相邻两站严丝合缝
+    const ctx = this.ctx;
+    ctx.fillStyle = GRID_DOT_COLOR;
+    for (let y = GRID_Y0; y < SCREEN_H; y += GRID_SIZE){
+      for (let x = GRID_X0; x < SCREEN_W; x += GRID_SIZE){
+        ctx.beginPath();
+        ctx.arc(x, y, GRID_DOT_R, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   _drawLines(){
