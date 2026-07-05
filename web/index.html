@@ -142,11 +142,16 @@
   .modal .msg.err { color: #d81b1b; }
   .modal .msg.ok  { color: #2baa4c; }
   .modal .close {
-    float: right; cursor: pointer; color: #8c8c96;
-    font-size: 20px; line-height: 1; padding: 0 4px;
-    user-select: none;
+    float: right;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; margin: -8px -8px 0 0;
+    cursor: pointer; color: #8c8c96;
+    font-size: 22px; line-height: 1; user-select: none;
+    border-radius: 22px;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
   }
-  .modal .close:hover { color: #28282d; }
+  .modal .close:hover { color: #28282d; background: #f4f4f6; }
+  .modal .close:active { background: #ececf0; }
   /* 历史模式选项 */
   #history-modal .card { width: min(540px, 94vw); }
   .history-opt {
@@ -199,6 +204,41 @@
     max-height: 100%;
     touch-action: none;
   }
+  /* 移动端底部控制条 — 仅触摸设备显示 */
+  #mobile-controls { display: none; }
+  @media (hover: none) and (pointer: coarse) {
+    #mobile-controls.on {
+      display: flex; gap: 10px;
+      position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+      z-index: 60;
+      padding: 6px 8px; border-radius: 30px;
+      background: rgba(255,255,255,0.94);
+      box-shadow: 0 3px 12px rgba(0,0,0,0.18);
+    }
+  }
+  .mc-btn {
+    width: 46px; height: 46px; border: 0; border-radius: 23px;
+    background: #f0f0f3; color: #28282d;
+    font-size: 19px; line-height: 1; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+    font-family: inherit;
+  }
+  .mc-btn:active { background: #dcdce2; transform: scale(0.94); }
+  .mc-btn.primary { background: #d81b1b; color: #fff; }
+  /* 竖屏提示 — 只在窄屏竖屏时挡住游戏, 提示横屏 */
+  #rotate-hint { display: none; }
+  @media (orientation: portrait) and (max-width: 900px) {
+    #rotate-hint {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      position: fixed; inset: 0; z-index: 9999;
+      background: #f5f4f0; color: #28282d;
+      font-size: 20px; text-align: center; padding: 24px; gap: 10px;
+    }
+    #rotate-hint .icon { font-size: 60px; color: #d81b1b; line-height: 1; }
+    #stage, #user-badge, #mobile-controls { visibility: hidden; }
+  }
 </style>
 </head>
 <body>
@@ -229,6 +269,22 @@
   </p>
 </noscript>
 <div id="stage"><canvas id="game" width="1200" height="760" aria-label="Mini Metro 简洁地铁模拟游戏画面"></canvas></div>
+
+<!-- 移动端底部控制条 (触摸设备且进入游戏后显示) -->
+<div id="mobile-controls">
+  <button class="mc-btn" id="mc-slower" aria-label="减速">−</button>
+  <button class="mc-btn primary" id="mc-pause" aria-label="暂停/继续">⏸</button>
+  <button class="mc-btn" id="mc-faster" aria-label="加速">+</button>
+  <button class="mc-btn" id="mc-restart" aria-label="重新开始">↻</button>
+  <button class="mc-btn" id="mc-home" aria-label="返回首页">⌂</button>
+</div>
+
+<!-- 竖屏提示 -->
+<div id="rotate-hint" aria-hidden="true">
+  <div class="icon">⟳</div>
+  <div>请横屏使用</div>
+  <div style="font-size:14px;opacity:.7;margin-top:2px">Rotate device to landscape</div>
+</div>
 
 <!-- 顶左用户徽章 -->
 <div id="user-badge">
@@ -533,6 +589,11 @@ class MetroGame {
     // 拖拽
     this.drag = null;       // {fromStation, lineIdx|null, side:1|-1, mouse:[x,y]}
     this.rightDrag = null;  // {station, origin:[x,y], moved}
+    // 移动端: (无 hover + 粗指针) = 触摸设备; 用于命中放大 + 提示文案 + 控制条
+    this._isTouch = !!(window.matchMedia && matchMedia("(hover: none) and (pointer: coarse)").matches);
+    this._touchLineHitMult = (window.matchMedia && matchMedia("(pointer: coarse)").matches) ? 1.8 : 1.0;
+    this._primaryTouchId = null;  // 当前跟踪的主手指 identifier
+    this._touch = null;           // 触摸手势状态机
     // 时间
     this.time = 0;          // 游戏分钟 (1 game min = 1 real sec)
     this.realTime = 0;      // 真实秒数
@@ -798,11 +859,15 @@ class MetroGame {
   }
 
   _stationAt(mx,my){
+    // 返回命中范围内最近的站台 (而非第一个), 相邻网格站台重叠时更符合手指意图
+    const r2 = STATION_HIT_R * STATION_HIT_R;
+    let best = -1, bestD = Infinity;
     for (let i=0;i<this.stations.length;i++){
       const s = this.stations[i];
-      if (dist2(s.x,s.y,mx,my) <= STATION_HIT_R*STATION_HIT_R) return i;
+      const d = dist2(s.x,s.y,mx,my);
+      if (d <= r2 && d < bestD){ bestD = d; best = i; }
     }
-    return -1;
+    return best;
   }
 
   // ----- 商城 -----
@@ -969,6 +1034,8 @@ class MetroGame {
 
   // 点击线路 (距任意线段中心线 < LINE_CLICK_RADIUS) -> 返回 {lineIdx, segIdx, t}
   _lineAtClick(x, y){
+    const r = LINE_CLICK_RADIUS * this._touchLineHitMult;   // 触摸端放大命中带
+    const r2 = r * r;
     for (let li = 0; li < this.lines.length; li++){
       const line = this.lines[li];
       for (let si = 0; si < line.stations.length - 1; si++){
@@ -981,7 +1048,7 @@ class MetroGame {
         t = clamp(t, 0, 1);
         const px = a.x + t * dx, py = a.y + t * dy;
         const d2 = (x - px) * (x - px) + (y - py) * (y - py);
-        if (d2 < LINE_CLICK_RADIUS * LINE_CLICK_RADIUS){
+        if (d2 < r2){
           return { lineIdx: li, segIdx: si, t };
         }
       }
@@ -1054,25 +1121,95 @@ class MetroGame {
       const [x,y] = toCanvas(e.clientX, e.clientY);
       this._onMouseMove(x, y);
     });
-    // 触摸支持: 单指 -> 左键
+    // ---- 触摸支持 ----
+    // 手势模型 (单指):
+    //   空地/线路轻点  -> 左键 (建站 / 生成列车), touchstart 立即执行
+    //   站->站 拖动    -> 左键连线 (在长按计时前移动手指即判定为连线拖拽)
+    //   站台长按(350ms) -> 右键手势; 松手=删除该站线路, 长按后拖动=移动站台
+    //   只跟踪第一根手指 (identifier); 第二根落下时取消手势, 避免捏合被劫持
+    const LONG_PRESS_MS = 350;
+    const TOUCH_SLOP = 10;   // canvas 坐标, 手指移动超过此值判定为拖拽而非长按
+    const findTouch = (list, id) => {
+      for (const t of list){ if (t.identifier === id) return t; }
+      return null;
+    };
+    const cancelTouch = () => {
+      if (this._touch && this._touch.timer) clearTimeout(this._touch.timer);
+      this._touch = null;
+      this._primaryTouchId = null;
+      this.drag = null;
+      this.rightDrag = null;
+    };
     cv.addEventListener("touchstart", e=>{
-      if (!e.touches[0]) return;
       e.preventDefault();
-      const [x,y] = toCanvas(e.touches[0].clientX, e.touches[0].clientY);
-      this._onMouseDown(0, x, y);
-    }, {passive:false});
-    cv.addEventListener("touchmove", e=>{
-      if (!e.touches[0]) return;
-      e.preventDefault();
-      const [x,y] = toCanvas(e.touches[0].clientX, e.touches[0].clientY);
-      this._onMouseMove(x,y);
-    }, {passive:false});
-    cv.addEventListener("touchend", e=>{
-      e.preventDefault();
+      // 已有主手指: 第二根手指落下 -> 取消当前手势
+      if (this._primaryTouchId != null){ cancelTouch(); return; }
       const t = e.changedTouches[0];
       if (!t) return;
+      this._primaryTouchId = t.identifier;
       const [x,y] = toCanvas(t.clientX, t.clientY);
-      this._onMouseUp(0, x, y);
+      // 非 play / 商城开着 / 已结束 -> 当作普通轻点, 立即触发
+      if (this.state !== "play" || this.shopOpen || this.gameOver){
+        this._touch = { mode: "tap" };
+        this._onMouseDown(0, x, y);
+        return;
+      }
+      const si = this._stationAt(x, y);
+      this._touch = { startX: x, startY: y, si, mode: "pending", timer: null };
+      if (si >= 0){
+        // 站台: 起长按计时, 到点转右键手势
+        this._touch.timer = setTimeout(()=>{
+          if (!this._touch) return;
+          this._touch.mode = "right";
+          this._onRightDown(this._touch.startX, this._touch.startY);
+          if (navigator.vibrate) { try { navigator.vibrate(15); } catch(_){} }
+        }, LONG_PRESS_MS);
+      } else {
+        // 空地 / 线路: 立即执行左键 (建站 / 生成列车)
+        this._touch.mode = "tap";
+        this._onMouseDown(0, x, y);
+      }
+    }, {passive:false});
+    cv.addEventListener("touchmove", e=>{
+      e.preventDefault();
+      if (this._primaryTouchId == null || !this._touch) return;
+      const t = findTouch(e.touches, this._primaryTouchId);
+      if (!t) return;
+      const [x,y] = toCanvas(t.clientX, t.clientY);
+      const tc = this._touch;
+      if (tc.mode === "pending"){
+        const dx = x - tc.startX, dy = y - tc.startY;
+        if (dx*dx + dy*dy > TOUCH_SLOP*TOUCH_SLOP){
+          // 长按计时前就移动了 -> 判定为从站台拖出连线
+          if (tc.timer) clearTimeout(tc.timer);
+          tc.mode = "leftdrag";
+          this._onMouseDown(0, tc.startX, tc.startY);
+          this._onMouseMove(x, y);
+        }
+      } else if (tc.mode === "leftdrag" || tc.mode === "right"){
+        this._onMouseMove(x, y);
+      }
+    }, {passive:false});
+    cv.addEventListener("touchend", e=>{
+      if (this._primaryTouchId == null || !this._touch) return;
+      const t = findTouch(e.changedTouches, this._primaryTouchId);
+      if (!t) return;   // 抬起的是非主手指, 保留主手势
+      e.preventDefault();
+      if (this._touch.timer) clearTimeout(this._touch.timer);
+      const [x,y] = toCanvas(t.clientX, t.clientY);
+      const mode = this._touch.mode;
+      if (mode === "leftdrag"){
+        this._onMouseUp(0, x, y);
+      } else if (mode === "right"){
+        this._onMouseUp(2, x, y);   // 路由到 _onRightUp: 未移动=删线, 移动过=完成移动
+      }
+      // mode 'tap' 已在 touchstart 执行完毕; mode 'pending' (站台快点未拖) 视为无操作
+      this._touch = null;
+      this._primaryTouchId = null;
+    }, {passive:false});
+    cv.addEventListener("touchcancel", e=>{
+      // 系统夺走手势 (通知中心/来电/返回手势/误触): 丢弃, 不提交
+      cancelTouch();
     }, {passive:false});
 
     window.addEventListener("keydown", e=>this._onKey(e));
@@ -1547,7 +1684,9 @@ class MetroGame {
     // 底部提示 + 署名
     ctx.fillStyle = "#82828a";
     ctx.font = "13px " + getComputedStyle(document.body).fontFamily;
-    const hint = "左键空地建站 · 拖线连线 · 点线路生列车 · 端点延伸 · 右键长按拖动站 · 空格暂停 · +/− 调速 · R 重开 · H 首页";
+    const hint = this._isTouch
+      ? "点空地建站 · 拖线连线 · 点线路生列车 · 长按拖动/删除站 · 底部按钮控制"
+      : "左键空地建站 · 拖线连线 · 点线路生列车 · 端点延伸 · 右键长按拖动站 · 空格暂停 · +/− 调速 · R 重开 · H 首页";
     const tw = ctx.measureText(hint).width;
     ctx.fillText(hint, SCREEN_W - tw - 16, SCREEN_H - 14);
     ctx.fillText("Powered by 江星野", 16, SCREEN_H - 14);
@@ -2153,12 +2292,44 @@ function fit(){
 window.addEventListener("resize", fit);
 fit();
 
+// 移动端底部控制条: 仅触摸设备 + 进入游戏后显示; 暂停按钮随状态翻转图标
+const mcBar = document.getElementById("mobile-controls");
+const mcPause = document.getElementById("mc-pause");
+function syncMobileControls(){
+  if (!game._isTouch || !mcBar) return;
+  const show = (game.state === "play");
+  mcBar.classList.toggle("on", show);
+  if (show && mcPause){
+    mcPause.textContent = game.paused ? "▶" : "⏸";
+  }
+}
+if (game._isTouch && mcBar){
+  document.getElementById("mc-slower").addEventListener("click", ()=>{
+    game.speedScale = Math.max(0.25, game.speedScale - 0.25);
+  });
+  document.getElementById("mc-faster").addEventListener("click", ()=>{
+    game.speedScale = Math.min(4, game.speedScale + 0.25);
+  });
+  mcPause.addEventListener("click", ()=>{
+    if (game.state === "play" && !game.gameOver) game.paused = !game.paused;
+  });
+  document.getElementById("mc-restart").addEventListener("click", ()=>{
+    if (game.state !== "play") return;
+    if (game.mode === "mystery") game._goHome();   // 神秘模式重开=回首页(需重新付费)
+    else game.reset();
+  });
+  document.getElementById("mc-home").addEventListener("click", ()=>{
+    if (game.state === "play") game._goHome();
+  });
+}
+
 let last = performance.now();
 function loop(now){
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
   game.update(dt);
   game.draw();
+  syncMobileControls();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
