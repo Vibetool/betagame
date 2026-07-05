@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>mini Metro 2026 5 12 — Mini Metro · 简洁地铁模拟 (浏览器版)</title>
 <meta name="description" content="mini Metro 2026 5 12: 一款浏览器中即点即玩的简洁地铁线路模拟游戏 (Mini Metro 风格), 支持经典模式与正常模式, 含氪金商城、限时速度加成、车厢扩容。Powered by 江星野。">
 <meta name="keywords" content="mini Metro 2026 5 12, mini metro, Mini Metro 2026, mini metro 5 12, 简洁地铁模拟, 地铁模拟游戏, 地铁线路游戏, 浏览器地铁游戏, mini metro web, mini metro 中文, 江星野">
@@ -51,7 +51,14 @@
     overflow: hidden;
     user-select: none;
     -webkit-user-select: none;
+    /* 禁止整页捏合缩放 / 双击缩放 / 橡皮筋回弹 (游戏页面不该缩放) */
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-text-size-adjust: 100%;
+    position: fixed; width: 100%;
   }
+  /* 可点的 DOM 控件仍允许即时点击 */
+  #user-badge, #mobile-controls, .modal { touch-action: manipulation; }
   #stage {
     width: 100%; height: 100%;
     display: flex; align-items: center; justify-content: center;
@@ -2266,6 +2273,12 @@ const Cloud = (() => {
 // ===========================================================
 const canvas = document.getElementById("game");
 const game = new MetroGame(canvas);
+
+// iOS Safari 会忽略 viewport 的 user-scalable=no; 用 gesture 事件兜底禁用整页捏合缩放
+// (gesture 事件只在 iOS 多指手势时触发, 不影响按钮 click)
+for (const ev of ["gesturestart", "gesturechange", "gestureend"]){
+  document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+}
 
 // 自适应缩放: 始终保持 1200x760 比例铺满窗口
 function fit(){
