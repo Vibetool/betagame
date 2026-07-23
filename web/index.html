@@ -498,7 +498,7 @@ const CAR_COLORS = ["#609cef","#5ab464","#e8c038","#dc3c3c"];
 const ACHIEVEMENTS = {
   first_coin:  { title: "第一桶金", desc: "赚到第一枚金币" },
   ten_coins:   { title: "百万富豪", desc: "累计赚到 10 枚金币" },
-  stingy:      { title: "抠门富豪", desc: "赚满 10 枚金币, 一枚都没花" },
+  stingy:      { title: "抠门富豪", desc: "赚到的前 10 枚金币, 一枚都没花" },
   big_spender: { title: "豪横平民", desc: "余额不足 5 枚时豪掷 2 金币买 buff" },
 };
 
@@ -624,6 +624,7 @@ class MetroGame {
     this.achUnlocked = new Set(saved.achievements);
     this.coinsEarnedTotal = saved.coinsEarnedTotal;  // 累计赚到的金币 (含神秘模式奖励)
     this.coinsSpentTotal = saved.coinsSpentTotal;    // 累计花掉的金币
+    this.stingyResolved = saved.stingyResolved;      // "抠门富豪" 是否已在第 10 枚时判定过
     // 商城
     this.shopOpen = false;
     this._shopButtonRect = null;
@@ -685,7 +686,8 @@ class MetroGame {
   // ----- 持久化 (登录态用云端, 否则用 localStorage) -----
   _loadPersist(){
     const empty = { coins:0, totalDeliveries:0, coinCredited:0,
-                    achievements:[], coinsEarnedTotal:0, coinsSpentTotal:0 };
+                    achievements:[], coinsEarnedTotal:0, coinsSpentTotal:0,
+                    stingyResolved:false };
     try {
       const s = localStorage.getItem(STORAGE_KEY);
       if (!s) return empty;
@@ -706,6 +708,7 @@ class MetroGame {
         achievements: Array.isArray(o.achievements) ? o.achievements : [],
         coinsEarnedTotal: earned|0,
         coinsSpentTotal: spent|0,
+        stingyResolved: o.stingyResolved === true,
       };
     } catch (e){
       return empty;
@@ -722,6 +725,7 @@ class MetroGame {
         achievements: [...this.achUnlocked],
         coinsEarnedTotal: this.coinsEarnedTotal,
         coinsSpentTotal: this.coinsSpentTotal,
+        stingyResolved: this.stingyResolved,
       }));
     } catch (e){}
     if (Cloud.user()){
@@ -1000,7 +1004,13 @@ class MetroGame {
     if (this.coinsEarnedTotal >= 1) this.unlockAchievement("first_coin");
     if (this.coinsEarnedTotal >= 10){
       this.unlockAchievement("ten_coins");
-      if (this.coinsSpentTotal === 0) this.unlockAchievement("stingy");
+      // 抠门富豪: 只看 "第 10 枚到手那一刻" 之前有没有花过钱 —
+      // 首次跨过 10 枚时判定一次并锁存, 之后花钱不影响 (错过也不能补)
+      if (!this.stingyResolved){
+        this.stingyResolved = true;
+        if (this.coinsSpentTotal === 0) this.unlockAchievement("stingy");
+        this._savePersist();
+      }
     }
   }
 
