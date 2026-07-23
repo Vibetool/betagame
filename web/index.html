@@ -233,9 +233,36 @@
   }
   .mc-btn:active { background: #dcdce2; transform: scale(0.94); }
   .mc-btn.primary { background: #d81b1b; color: #fff; }
+  /* 成就弹窗 (左上角) */
+  #ach-toasts {
+    position: fixed; top: 14px; left: 16px; z-index: 300;
+    display: flex; flex-direction: column; gap: 10px;
+    pointer-events: none;
+  }
+  .ach-toast {
+    display: flex; align-items: center; gap: 12px;
+    background: #2d2d37; color: #fff;
+    border-radius: 12px; padding: 12px 18px 12px 14px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.28);
+    border: 1px solid #4a4a58;
+    max-width: 320px;
+    animation: ach-in 420ms cubic-bezier(0.22, 1.2, 0.36, 1) both;
+  }
+  .ach-toast.out { animation: ach-out 380ms ease-in both; }
+  .ach-toast .medal { font-size: 26px; line-height: 1; }
+  .ach-toast .t1 { font-size: 15px; font-weight: 700; color: #f5c038; }
+  .ach-toast .t2 { font-size: 12px; color: #c8c8d0; margin-top: 2px; }
+  @keyframes ach-in {
+    from { transform: translateX(-120%); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes ach-out {
+    from { transform: translateX(0); opacity: 1; }
+    to   { transform: translateX(-120%); opacity: 0; }
+  }
   /* 竖屏提示 — 只在窄屏竖屏时挡住游戏, 提示横屏 */
   #rotate-hint { display: none; }
-  @media (orientation: portrait) and (max-width: 900px) {
+  @media (orientation: portrait) and (max-width: 900px) and (pointer: coarse) {
     #rotate-hint {
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
@@ -285,6 +312,9 @@
   <button class="mc-btn" id="mc-restart" aria-label="重新开始">↻</button>
   <button class="mc-btn" id="mc-home" aria-label="返回首页">⌂</button>
 </div>
+
+<!-- 成就弹窗容器 (左上角) -->
+<div id="ach-toasts" role="status" aria-live="polite"></div>
 
 <!-- 竖屏提示 -->
 <div id="rotate-hint" aria-hidden="true">
@@ -464,6 +494,14 @@ const SHOP_ITEMS = [
 // 车厢按 0/1/2/3 人着色
 const CAR_COLORS = ["#609cef","#5ab464","#e8c038","#dc3c3c"];
 
+// 成就定义 (id 持久化到本机, 不重复弹出)
+const ACHIEVEMENTS = {
+  first_coin:  { title: "第一桶金", desc: "赚到第一枚金币" },
+  ten_coins:   { title: "百万富豪", desc: "累计赚到 10 枚金币" },
+  stingy:      { title: "抠门富豪", desc: "赚满 10 枚金币, 一枚都没花" },
+  big_spender: { title: "豪横平民", desc: "余额不足 5 枚时豪掷 2 金币买 buff" },
+};
+
 // ===========================================================
 // 工具
 // ===========================================================
@@ -582,6 +620,10 @@ class MetroGame {
     this._coinCredited = saved.coinCredited;
     this.activeBoosts = [];          // {percent, remaining}
     this.activeCarriageBuffs = [];   // {bonus, remaining}
+    // 成就 (本机持久)
+    this.achUnlocked = new Set(saved.achievements);
+    this.coinsEarnedTotal = saved.coinsEarnedTotal;  // 累计赚到的金币 (含神秘模式奖励)
+    this.coinsSpentTotal = saved.coinsSpentTotal;    // 累计花掉的金币
     // 商城
     this.shopOpen = false;
     this._shopButtonRect = null;
@@ -642,17 +684,31 @@ class MetroGame {
 
   // ----- 持久化 (登录态用云端, 否则用 localStorage) -----
   _loadPersist(){
+    const empty = { coins:0, totalDeliveries:0, coinCredited:0,
+                    achievements:[], coinsEarnedTotal:0, coinsSpentTotal:0 };
     try {
       const s = localStorage.getItem(STORAGE_KEY);
-      if (!s) return { coins:0, totalDeliveries:0, coinCredited:0 };
+      if (!s) return empty;
       const o = JSON.parse(s);
+      const coins = o.coins|0, coinCredited = o.coinCredited|0;
+      // 老存档补种子: 没有累计字段时, 用 "送达折算的金币" 估算累计赚取,
+      // 用 (赚取 - 余额) 估算累计花费 (神秘模式奖励无法追溯, 取近似)
+      let earned = o.coinsEarnedTotal;
+      let spent  = o.coinsSpentTotal;
+      if (typeof earned !== "number"){
+        earned = Math.floor(coinCredited / COIN_PER_DELIVERIES);
+        spent  = Math.max(0, earned - coins);
+      }
       return {
-        coins: o.coins|0,
+        coins,
         totalDeliveries: o.totalDeliveries|0,
-        coinCredited: o.coinCredited|0,
+        coinCredited,
+        achievements: Array.isArray(o.achievements) ? o.achievements : [],
+        coinsEarnedTotal: earned|0,
+        coinsSpentTotal: spent|0,
       };
     } catch (e){
-      return { coins:0, totalDeliveries:0, coinCredited:0 };
+      return empty;
     }
   }
   _savePersist(){
@@ -663,6 +719,9 @@ class MetroGame {
         coins: this.coins,
         totalDeliveries: this.totalDeliveries,
         coinCredited: this._coinCredited,
+        achievements: [...this.achUnlocked],
+        coinsEarnedTotal: this.coinsEarnedTotal,
+        coinsSpentTotal: this.coinsSpentTotal,
       }));
     } catch (e){}
     if (Cloud.user()){
@@ -890,9 +949,15 @@ class MetroGame {
     return s;
   }
   _tickCoins(){
+    let gained = 0;
     while (this.totalDeliveries - this._coinCredited >= COIN_PER_DELIVERIES){
       this._coinCredited += COIN_PER_DELIVERIES;
       this.coins += 1;
+      gained += 1;
+    }
+    if (gained > 0){
+      this.coinsEarnedTotal += gained;
+      this._checkCoinAchievements();
     }
     this._savePersist();
   }
@@ -904,7 +969,12 @@ class MetroGame {
       this._shopMsgUntil = this.realTime + 2.0;
       return false;
     }
+    // 豪横平民: 余额 <5 时买 2 金币的 buff (在扣款前判定余额)
+    if (item.cost === 2 && this.coins < 5){
+      this.unlockAchievement("big_spender");
+    }
     this.coins -= item.cost;
+    this.coinsSpentTotal += item.cost;
     if (item.kind === "boost"){
       this.activeBoosts.push({percent:item.percent, remaining:item.duration});
       this._shopMessage = `已激活: ${item.name}`;
@@ -915,6 +985,23 @@ class MetroGame {
     this._shopMsgUntil = this.realTime + 2.0;
     this._savePersist();
     return true;
+  }
+
+  // ----- 成就 -----
+  unlockAchievement(id){
+    if (this.achUnlocked.has(id) || !ACHIEVEMENTS[id]) return;
+    this.achUnlocked.add(id);
+    this._savePersist();
+    if (typeof showAchievementToast === "function"){
+      showAchievementToast(ACHIEVEMENTS[id]);
+    }
+  }
+  _checkCoinAchievements(){
+    if (this.coinsEarnedTotal >= 1) this.unlockAchievement("first_coin");
+    if (this.coinsEarnedTotal >= 10){
+      this.unlockAchievement("ten_coins");
+      if (this.coinsSpentTotal === 0) this.unlockAchievement("stingy");
+    }
   }
 
   // ----- 时段客流系数 -----
@@ -1082,6 +1169,8 @@ class MetroGame {
       if (cfg && !this.mysteryWon && this.mysteryDeliveries >= cfg.target){
         this.mysteryWon = true;
         this.coins += cfg.reward;
+        this.coinsEarnedTotal += cfg.reward;
+        this._checkCoinAchievements();
         this._savePersist();
         this._shopMessage = `挑战达成! +${cfg.reward} 金币`;
         this._shopMsgUntil = this.realTime + 4.0;
@@ -2280,6 +2369,27 @@ for (const ev of ["gesturestart", "gesturechange", "gestureend"]){
   document.addEventListener(ev, e => e.preventDefault(), { passive: false });
 }
 
+// ===========================================================
+// 成就弹窗 (左上角滑入, 停留 4.5s 后滑出)
+// ===========================================================
+function showAchievementToast(ach){
+  const box = document.getElementById("ach-toasts");
+  if (!box) return;
+  const el = document.createElement("div");
+  el.className = "ach-toast";
+  el.innerHTML =
+    '<div class="medal">🏆</div>' +
+    '<div><div class="t1"></div><div class="t2"></div></div>';
+  el.querySelector(".t1").textContent = "成就解锁 · " + ach.title;
+  el.querySelector(".t2").textContent = ach.desc;
+  box.appendChild(el);
+  setTimeout(()=>{ el.classList.add("out"); }, 4500);
+  setTimeout(()=>{ el.remove(); }, 5000);
+}
+
+// 启动时补查一次: 老玩家的历史进度 (如已累计 10 金币) 在本次加载补发成就
+setTimeout(()=>{ try { game._checkCoinAchievements(); } catch(e){} }, 1200);
+
 // 自适应缩放: 始终保持 1200x760 比例铺满窗口
 function fit(){
   const cssW = window.innerWidth, cssH = window.innerHeight;
@@ -2535,6 +2645,7 @@ function openMysteryModal(){
     if (can){
       div.addEventListener("click", ()=>{
         game.coins -= n;
+        game.coinsSpentTotal += n;
         game.mysteryConfig = {
           entryCoins: n,
           target,
