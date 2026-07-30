@@ -2450,7 +2450,9 @@ function fit(){
     const offY = (cssH - h) / 2;   // 画布上下黑边高
     // 跟随画布缩放, 与画布上"氪金商城"按钮同高、在同一条水平线上:
     //   商城按钮在画布坐标 y=28 顶、高 36 -> 徽章 font-size*2.4em = 36*scale, top 对齐到 28*scale
-    badge.style.fontSize = (15 * scale) + "px";
+    // 12px 下限: 小屏手机 (scale~0.5) 下不设限会缩到 7-8px, 按钮高 17px 根本点不到;
+    // 下限只在画布窄于 ~960px 时生效, 桌面/平板不受影响
+    badge.style.fontSize = Math.max(12, 15 * scale) + "px";
     badge.style.top   = (offY + 28 * scale) + "px";
     badge.style.right = (offX + 30 * scale) + "px";
   }
@@ -2743,9 +2745,15 @@ $("auth-modal").addEventListener("click", e=>{ if (e.target.id==="auth-modal") h
 $("leaderboard-modal").addEventListener("click", e=>{ if (e.target.id==="leaderboard-modal") $("leaderboard-modal").hidden = true; });
 
 // 离开页面前最后保存一次
-window.addEventListener("beforeunload", ()=>{
+// 退出/切后台时的最后一次保存。
+// Android Chrome / 微信 X5 在切走 App / 关标签时 *不会* 可靠触发 beforeunload,
+// 但一定会触发 visibilitychange(hidden) 和 pagehide, 所以三个都挂上, 用 1s 去重。
+let _lastFlush = 0;
+function flushSave(){
+  const now = Date.now();
+  if (now - _lastFlush < 1000) return;   // 三个事件连发时只送一次
+  _lastFlush = now;
   if (Cloud.user()){
-    // 关页时 keepalive:true 让浏览器把这几条 POST 也送出去, 不被 unload 打断
     Cloud.pushStats({
       coins: game.coins,
       total_deliveries: game.totalDeliveries,
@@ -2757,7 +2765,6 @@ window.addEventListener("beforeunload", ()=>{
       Cloud.pushSnapshot(game.snapshot(), { keepalive: true });
     }
   } else if (game.state === "play" && game.stations.length){
-    // 离线模式: localStorage 已经同步写过了, 这里再补一次防止极端 race
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
         coins: game.coins, totalDeliveries: game.totalDeliveries,
@@ -2765,6 +2772,11 @@ window.addEventListener("beforeunload", ()=>{
       }));
     } catch (e){}
   }
+}
+window.addEventListener("beforeunload", flushSave);
+window.addEventListener("pagehide", flushSave);
+document.addEventListener("visibilitychange", ()=>{
+  if (document.visibilityState === "hidden") flushSave();
 });
 </script>
 </body>
