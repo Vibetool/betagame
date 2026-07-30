@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<!-- 安卓 X5/QQ 系内核的强制横屏提示 (微信安卓部分版本生效) -->
+<meta name="x5-orientation" content="landscape">
+<meta name="screen-orientation" content="landscape">
 <title>mini Metro 2026 5 12 — Mini Metro · 简洁地铁模拟 (浏览器版)</title>
 <meta name="description" content="mini Metro 2026 5 12: 一款浏览器中即点即玩的简洁地铁线路模拟游戏 (Mini Metro 风格), 支持经典模式与正常模式, 含氪金商城、限时速度加成、车厢扩容。Powered by 江星野。">
 <meta name="keywords" content="mini Metro 2026 5 12, mini metro, Mini Metro 2026, mini metro 5 12, 简洁地铁模拟, 地铁模拟游戏, 地铁线路游戏, 浏览器地铁游戏, mini metro web, mini metro 中文, 江星野">
@@ -273,6 +276,20 @@
     #rotate-hint .icon { font-size: 60px; color: #d81b1b; line-height: 1; }
     #stage, #user-badge, #mobile-controls { visibility: hidden; }
   }
+  /* 微信等无法横屏的环境: 用户点“仍要继续”后解除遮罩竖屏游玩 */
+  body.rotate-dismissed #rotate-hint { display: none; }
+  body.rotate-dismissed #stage,
+  body.rotate-dismissed #user-badge,
+  body.rotate-dismissed #mobile-controls { visibility: visible; }
+  #rotate-continue {
+    margin-top: 14px; padding: 12px 26px;
+    font-size: 16px; font-weight: 600;
+    color: #fff; background: #28282d;
+    border: none; border-radius: 10px; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #rotate-wx-tip { font-size: 14px; opacity: .78; max-width: 22em; line-height: 1.7; }
+  #rotate-wx-tip[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -316,12 +333,28 @@
 <!-- 成就弹窗容器 (左上角) -->
 <div id="ach-toasts" role="status" aria-live="polite"></div>
 
-<!-- 竖屏提示 -->
-<div id="rotate-hint" aria-hidden="true">
+<!-- 竖屏提示 (含按钮, 不能设 aria-hidden) -->
+<div id="rotate-hint">
   <div class="icon">⟳</div>
   <div>请横屏使用</div>
   <div style="font-size:14px;opacity:.7;margin-top:2px">Rotate device to landscape</div>
+  <div id="rotate-wx-tip" hidden>微信内无法横屏：点右上角 <b>···</b> 选择「在浏览器中打开」，<br>或点下方按钮直接竖屏游玩</div>
+  <button id="rotate-continue" type="button">仍要继续（竖屏体验较差）</button>
 </div>
+<script>
+(function () {
+  var btn = document.getElementById('rotate-continue');
+  var wxTip = document.getElementById('rotate-wx-tip');
+  if (/MicroMessenger/i.test(navigator.userAgent)) wxTip.hidden = false;
+  function dismiss() {
+    document.body.classList.add('rotate-dismissed');
+    try { sessionStorage.setItem('rotateDismissed', '1'); } catch (e) {}
+    window.dispatchEvent(new Event('resize'));
+  }
+  btn.addEventListener('click', dismiss);
+  try { if (sessionStorage.getItem('rotateDismissed') === '1') dismiss(); } catch (e) {}
+})();
+</script>
 
 <!-- 顶左用户徽章 -->
 <div id="user-badge">
