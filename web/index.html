@@ -2765,12 +2765,8 @@ function flushSave(){
       Cloud.pushSnapshot(game.snapshot(), { keepalive: true });
     }
   } else if (game.state === "play" && game.stations.length){
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        coins: game.coins, totalDeliveries: game.totalDeliveries,
-        coinCredited: game._coinCredited,
-      }));
-    } catch (e){}
+    // 必须全量写入: 手写字段子集会截断覆盖 7 字段完整存档, 抹掉成就与累计统计
+    game._savePersist();
   }
 }
 window.addEventListener("beforeunload", flushSave);
